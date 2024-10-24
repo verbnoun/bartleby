@@ -43,13 +43,9 @@ class Constants:
     NUM_KEYS = 25
     NUM_CHANNELS = 50
     ALPHA = 0.05
-    MAX_VK_RESISTANCE = 10000
-    MIN_VK_RESISTANCE = 5000
+    MAX_VK_RESISTANCE = 50000
+    MIN_VK_RESISTANCE = 500
     ADC_RESISTANCE_SCALE = 5000 # Lower scaling factor to make more sensitive 
-
-    
-    # Timing Constants
-    UPDATE_INTERVAL = 0.001
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
@@ -99,7 +95,7 @@ class KeyMultiplexer:
         raw_values = []
         for i in range(4):
             self.select_channel(1, i)  # Select a level 1 channel
-            time.sleep(0.001)  # Allow the mux to settle
+            # time.sleep(0.001)  # Allow the mux to settle
             
             # Determine the number of channels to scan on MUX3 (level 2)
             channels_to_scan = 16 if i < 3 else 2  # Last MUX only needs 2 channels
@@ -248,7 +244,7 @@ class KeyboardHandler:
                 left_resistance = self.adc_to_resistance(raw_values[left_channel])
                 right_resistance = self.adc_to_resistance(raw_values[right_channel])
 
-                print(f"Key {i}: L={left_resistance}Ω R={right_resistance}Ω")
+                # print(f"Key {i}: L={left_resistance}Ω R={right_resistance}Ω")
 
                 left_normalized = self.normalize_resistance(left_resistance)
                 right_normalized = self.normalize_resistance(right_resistance)

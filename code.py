@@ -26,13 +26,12 @@ class Constants:
     I2S_WORD_SELECT = board.GP2
 
     # Synthesizer Constants
-    AUDIO_BUFFER_SIZE = 8192
+    AUDIO_BUFFER_SIZE = 4096 #8,192
     SAMPLE_RATE = 44100
 
     # scan frequency
-    POT_SCAN_INTERVAL = 0.01    
-    ENCODER_SCAN_INTERVAL = 0.02 
-    KEY_SCAN_INTERVAL = 0.001    
+    POT_SCAN_INTERVAL = 0.02
+    ENCODER_SCAN_INTERVAL = 0.02
 
 class SynthVoiceManager:
     def __init__(self):
