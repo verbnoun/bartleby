@@ -349,10 +349,6 @@ class Synthesizer:
                 note.bend = bend_multiplier
 
     def handle_control_change(self, cc_number, midi_value, normalized_value):
-
-        # print(f"Filter CC: {cc_number} midi:{midi_value} norm:{normalized_value}")
-
-
         self.current_midi_values[cc_number] = midi_value
         pots_config = self.instrument.pots
         for pot_index, pot_config in pots_config.items():
@@ -361,6 +357,9 @@ class Synthesizer:
                 min_val = pot_config['min']
                 max_val = pot_config['max']
                 scaled_value = min_val + normalized_value * (max_val - min_val)
+                
+                # Print pot change information
+                print(f"P{pot_index}: {param_name}: {self.current_midi_values.get(cc_number, 0)/127.0:.2f} -> {normalized_value:.2f}")
                 
                 if param_name == 'Filter Cutoff':
                     self.synth_engine.set_filter_cutoff(scaled_value)
@@ -528,4 +527,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

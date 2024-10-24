@@ -39,7 +39,8 @@ class Constants:
     INSTRUMENT_ENC_DT = board.GP15
 
     # Potentiometer Constants
-    POT_THRESHOLD = 800
+    POT_THRESHOLD = 1000  # Threshold for initial pot activation
+    POT_CHANGE_THRESHOLD = 400  # Threshold for subsequent changes when pot is active
     POT_LOWER_TRIM = 0.05
     POT_UPPER_TRIM = 0.0
     NUM_POTS = 10
@@ -55,19 +56,26 @@ class Constants:
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
         self.sig = analogio.AnalogIn(sig_pin)
+        # Order pins from LSB to MSB (S0 to S3)
         self.select_pins = [
             digitalio.DigitalInOut(pin) for pin in (s0_pin, s1_pin, s2_pin, s3_pin)
         ]
         for pin in self.select_pins:
             pin.direction = digitalio.Direction.OUTPUT
+            pin.value = False  # Initialize all pins to 0
 
     def select_channel(self, channel):
-        for i, pin in enumerate(self.select_pins):
-            pin.value = (channel >> i) & 1
+        # Convert channel number to 4-bit binary
+        # For example, channel 5 (0101) should set S0=1, S1=0, S2=1, S3=0
+        for i in range(4):
+            self.select_pins[i].value = bool((channel >> i) & 1)
+        time.sleep(0.0001)  # Small delay to allow mux to settle
 
     def read_channel(self, channel):
-        self.select_channel(channel)
-        return self.sig.value
+        if 0 <= channel < 16:  # Ensure channel is in valid range
+            self.select_channel(channel)
+            return self.sig.value
+        return 0
     
 class KeyMultiplexer:
     def __init__(self, l1_sig_pin, l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin, 
@@ -193,6 +201,7 @@ class PotentiometerHandler:
     def __init__(self, multiplexer):
         self.multiplexer = multiplexer
         self.last_reported_values = [0] * Constants.NUM_POTS
+        self.last_normalized_values = [0.0] * Constants.NUM_POTS
         self.is_active = [False] * Constants.NUM_POTS
         self.last_change = [0] * Constants.NUM_POTS
 
@@ -205,33 +214,33 @@ class PotentiometerHandler:
             normalized = 1
         else:
             normalized = (normalized - Constants.POT_LOWER_TRIM) / (1 - Constants.POT_LOWER_TRIM - Constants.POT_UPPER_TRIM)
-        return round(normalized, 5)
+        return round(normalized, 3)  # Reduced precision to help with noise
 
     def read_pots(self):
         changed_pots = []
         for i in range(Constants.NUM_POTS):
-            # Pots are on channels 0-9
             raw_value = self.multiplexer.read_channel(i)
+            normalized_new = self.normalize_value(raw_value)
             change = abs(raw_value - self.last_reported_values[i])
             
             if self.is_active[i]:
-                if change != 0:
-                    normalized_old = self.normalize_value(self.last_reported_values[i])
-                    normalized_new = self.normalize_value(raw_value)
-                    changed_pots.append((i, normalized_old, normalized_new))
-                    self.last_reported_values[i] = raw_value
-                    self.last_change[i] = change
-                    pot_values = [self.normalize_value(val) for val in self.last_reported_values]
+                # Only report changes if they exceed the change threshold
+                if change > Constants.POT_CHANGE_THRESHOLD:
+                    # Only report if normalized value has actually changed
+                    if normalized_new != self.last_normalized_values[i]:
+                        changed_pots.append((i, self.last_normalized_values[i], normalized_new))
+                        self.last_reported_values[i] = raw_value
+                        self.last_normalized_values[i] = normalized_new
+                        self.last_change[i] = change
                 elif change < Constants.POT_THRESHOLD:
                     self.is_active[i] = False
             elif change > Constants.POT_THRESHOLD:
                 self.is_active[i] = True
-                normalized_old = self.normalize_value(self.last_reported_values[i])
-                normalized_new = self.normalize_value(raw_value)
-                changed_pots.append((i, normalized_old, normalized_new))
-                self.last_reported_values[i] = raw_value
-                self.last_change[i] = change
-                pot_values = [self.normalize_value(val) for val in self.last_reported_values]
+                if normalized_new != self.last_normalized_values[i]:
+                    changed_pots.append((i, self.last_normalized_values[i], normalized_new))
+                    self.last_reported_values[i] = raw_value
+                    self.last_normalized_values[i] = normalized_new
+                    self.last_change[i] = change
                 
         return changed_pots
 
