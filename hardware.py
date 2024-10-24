@@ -7,6 +7,7 @@ class Constants:
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1
+
     
     # Pin Definitions
     ROTENC_MUX_SIG = board.GP28
@@ -42,8 +43,10 @@ class Constants:
     NUM_KEYS = 25
     NUM_CHANNELS = 50
     ALPHA = 0.05
-    MAX_VK_RESISTANCE = 20000
-    MIN_VK_RESISTANCE = 1750
+    MAX_VK_RESISTANCE = 10000
+    MIN_VK_RESISTANCE = 5000
+    ADC_RESISTANCE_SCALE = 5000 # Lower scaling factor to make more sensitive 
+
     
     # Timing Constants
     UPDATE_INTERVAL = 0.001
@@ -138,6 +141,8 @@ class RotaryEncoderHandler:
         dt_state = self._read_digital(base_channel + 1)
         time.sleep(self.channel_read_delay)
 
+        # print(f"ENC {encoder_num}: CLK={clk_state} DT={dt_state}")
+
         if clk_state != self.clk_last_states[encoder_num]:
             direction = -1 if dt_state != clk_state else 1
             new_position = self.encoder_positions[encoder_num] + direction
@@ -155,9 +160,6 @@ class RotaryEncoderHandler:
 
     def get_encoder_position(self, encoder_num):
         return self.encoder_positions[encoder_num]
-
-    # def _log_rotation(self, encoder_num, direction):
-    #     rotation_string = f"{encoder_num} {'+' if direction > 0 else '-'}"
 
 class PotentiometerHandler:
     def __init__(self, multiplexer):
@@ -181,9 +183,12 @@ class PotentiometerHandler:
 
     def read_pots(self):
         changed_pots = []
-        
+
         for i in range(Constants.NUM_POTS):
             raw_value = self.multiplexer.read_channel(i)
+
+            # print(f"POT {i}: {raw_value}")
+
             change = abs(raw_value - self.last_reported_values[i])
 
             if self.is_active[i]:
@@ -217,9 +222,9 @@ class KeyboardHandler:
 
     def adc_to_resistance(self, adc_value):
         voltage = (adc_value / Constants.ADC_MAX) * 3.3
-        if voltage >= 3.29:
-            return float('inf')
-        return 10000 * voltage / (3.3 - voltage)
+        if voltage >= 3.0:  # More lenient threshold for "no touch"
+           return float('inf')
+        return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
 
     def normalize_resistance(self, resistance):
         if resistance >= Constants.MAX_VK_RESISTANCE:
@@ -242,6 +247,8 @@ class KeyboardHandler:
             if left_channel < len(raw_values) and right_channel < len(raw_values):
                 left_resistance = self.adc_to_resistance(raw_values[left_channel])
                 right_resistance = self.adc_to_resistance(raw_values[right_channel])
+
+                print(f"Key {i}: L={left_resistance}Ω R={right_resistance}Ω")
 
                 left_normalized = self.normalize_resistance(left_resistance)
                 right_normalized = self.normalize_resistance(right_resistance)

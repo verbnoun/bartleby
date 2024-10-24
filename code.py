@@ -29,6 +29,11 @@ class Constants:
     AUDIO_BUFFER_SIZE = 8192
     SAMPLE_RATE = 44100
 
+    # scan frequency
+    POT_SCAN_INTERVAL = 0.01    
+    ENCODER_SCAN_INTERVAL = 0.02 
+    KEY_SCAN_INTERVAL = 0.001    
+
 class SynthVoiceManager:
     def __init__(self):
         self.active_notes = {}  # Maps key_id to Note objects
@@ -126,7 +131,8 @@ class SynthEngine:
         self._update_filter()
 
     def set_filter_cutoff(self, cutoff):
-        self.filter_config['cutoff'] = cutoff
+        safe_cutoff = max(20, min(20000, float(cutoff)))
+        self.filter_config['cutoff'] = safe_cutoff
         self._update_filter()
 
     def _update_filter(self):
@@ -344,6 +350,10 @@ class Synthesizer:
                 note.bend = bend_multiplier
 
     def handle_control_change(self, cc_number, midi_value, normalized_value):
+
+        # print(f"Filter CC: {cc_number} midi:{midi_value} norm:{normalized_value}")
+
+
         self.current_midi_values[cc_number] = midi_value
         pots_config = self.instrument.pots
         for pot_index, pot_config in pots_config.items():
@@ -434,7 +444,6 @@ def main():
     midi_logic = MidiLogic()
     synthesizer = Synthesizer(audio_output_manager)
 
-
     print("Starting PicoSynth (҂◡_◡) ᕤ")
 
     # Set initial volume based on pot 0
@@ -444,65 +453,67 @@ def main():
     # Set initial octave to 0
     midi_logic.note_processor.set_octave(0)
     
-    # Perform final initialization just before the main loop
-    last_encoder_positions = [0] * rotary_handler.num_encoders
+    # Initialize encoders
     rotary_handler.reset_all_encoder_positions()
     
     # Set and apply the initial instrument
     current_instrument = Instrument.get_current_instrument()
     synthesizer.set_instrument(current_instrument)
 
-    last_update_time = time.monotonic()
+    # Initialize timing
+    current_time = time.monotonic()
+    last_pot_scan = current_time
+    last_encoder_scan = current_time
+
+    # Initial states
+    changed_keys = []
+    changed_pots = []
+    encoder_events = []
+
     while True:
         current_time = time.monotonic()
-
-        # Read inputs
+        
+        # Always read keys at full speed
         changed_keys = keyboard.read_keys()
-        changed_pots = pot_handler.read_pots()
         
-        # Handle volume separately
-        for pot_id, old_value, new_value in changed_pots[:]:
-            if pot_id == 0:
-                audio_output_manager.update_volume(new_value)
-                changed_pots.remove((pot_id, old_value, new_value))
+        # Read pots at medium interval
+        if current_time - last_pot_scan >= Constants.POT_SCAN_INTERVAL:
+            changed_pots = pot_handler.read_pots()
+            if changed_pots:
+                for pot_id, old_value, new_value in changed_pots[:]:
+                    if pot_id == 0:
+                        audio_output_manager.update_volume(new_value)
+                        changed_pots.remove((pot_id, old_value, new_value))
+            last_pot_scan = current_time
         
-        # Read encoders less frequently
-        encoder_events = []
-        if current_time - last_update_time >= HWConstants.UPDATE_INTERVAL:
+        # Read encoders at slowest interval
+        if current_time - last_encoder_scan >= Constants.ENCODER_SCAN_INTERVAL:
+            encoder_events = []
             for i in range(rotary_handler.num_encoders):
                 new_events = rotary_handler.read_encoder(i)
                 if new_events:
                     encoder_events.extend(new_events)
-                    last_encoder_positions[i] = rotary_handler.get_encoder_position(i)
+                    if new_events[0][0] == 'rotation':
+                        encoder_id, direction = new_events[0][1:3]
+                        if encoder_id == 0:  # Octave control
+                            midi_logic.handle_octave_shift(direction)
+                        elif encoder_id == 1:  # Instrument selection
+                            new_instrument = Instrument.handle_instrument_change(direction)
+                            synthesizer.set_instrument(new_instrument)
+                            current_instrument = new_instrument
+            last_encoder_scan = current_time
+
+        # Process MIDI and synth updates only if we have changes
+        if changed_keys or changed_pots or encoder_events:
+            midi_events = midi_logic.update(changed_keys, changed_pots, current_instrument.get_configuration())
+            processed_events = midi_logic.process_and_send_midi_events(midi_events)
             
-            last_update_time = current_time
+            for event in processed_events:
+                synthesizer.process_midi_event(event)
+            synthesizer.update(processed_events)
 
-        # Handle encoder events
-        for event in encoder_events:
-            if event[0] == 'rotation':
-                encoder_id, direction, _ = event[1], event[2], event[3]
-                if encoder_id == 0:  # Octave control
-                    midi_logic.handle_octave_shift(direction)
-                elif encoder_id == 1:  # Instrument selection
-                    new_instrument = Instrument.handle_instrument_change(direction)
-                    synthesizer.set_instrument(new_instrument)
-
-        # Get current instrument configuration
-        current_instrument = Instrument.get_current_instrument()
-        instrument_config = current_instrument.get_configuration()
-
-        # Process MIDI events
-        midi_events = midi_logic.update(changed_keys, changed_pots, instrument_config)
-        processed_events = midi_logic.process_and_send_midi_events(midi_events)
-
-        # Update synthesizer
-        for event in processed_events:
-            synthesizer.process_midi_event(event)
-        
-        synthesizer.update(processed_events)
-
-        # Small sleep to prevent CPU overload
-        time.sleep(0.001)
+        time.sleep(0.001)  # Prevent CPU overload
 
 if __name__ == "__main__":
     main()
+
