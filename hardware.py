@@ -39,7 +39,7 @@ class Constants:
     INSTRUMENT_ENC_DT = board.GP15
 
     # Potentiometer Constants
-    POT_THRESHOLD = 1000  # Threshold for initial pot activation
+    POT_THRESHOLD = 1500  # Threshold for initial pot activation
     POT_CHANGE_THRESHOLD = 400  # Threshold for subsequent changes when pot is active
     POT_LOWER_TRIM = 0.05
     POT_UPPER_TRIM = 0.0
@@ -186,6 +186,7 @@ class RotaryEncoderHandler:
                 if new_pos != current_pos:
                     self.encoder_positions[encoder_num] = new_pos
                     events.append(('rotation', encoder_num, direction, new_pos))
+                    print(f"E{encoder_num}: Position: {current_pos} -> {new_pos}")
         
         # Save current states for next iteration
         self.last_states[encoder_num] = (clk_state, dt_state)

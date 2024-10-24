@@ -19,6 +19,9 @@ class Constants:
     LOG_MIDI = True
     LOG_SYNTH = True
     LOG_MISC = True
+
+    # Hardware Setup Delay
+    SETUP_DELAY = 0.1
     
     # PCM5102A DAC Pins
     I2S_DATA = board.GP0
@@ -29,9 +32,11 @@ class Constants:
     AUDIO_BUFFER_SIZE = 4096 #8,192
     SAMPLE_RATE = 44100
 
-    # scan frequency
+    # Scan Intervals (in seconds)
     POT_SCAN_INTERVAL = 0.02
-    ENCODER_SCAN_INTERVAL = 0.02
+    ENCODER_SCAN_INTERVAL = 0.001  # Fast scan for direct GPIO
+    MAIN_LOOP_INTERVAL = 0.001
+    
 
 class SynthVoiceManager:
     def __init__(self):
@@ -272,7 +277,9 @@ class SynthAudioOutputManager:
         self.audio.stop()
 
     def update_volume(self, pot_value):
+        old_volume = self.volume
         self.set_volume(pot_value)
+        print(f"P0: Volume: {old_volume:.2f} -> {pot_value:.2f}")
 
 class Synthesizer:
     def __init__(self, audio_output_manager):
@@ -414,116 +421,208 @@ class Synthesizer:
     def _fractional_midi_to_hz(self, midi_note):
         return 440 * (2 ** ((midi_note - 69) / 12))
 
-def main():
-    # Setup hardware with consolidated multiplexer (for pots only now)
-    control_mux = Multiplexer(HWConstants.CONTROL_MUX_SIG, HWConstants.CONTROL_MUX_S0, 
-                             HWConstants.CONTROL_MUX_S1, HWConstants.CONTROL_MUX_S2, HWConstants.CONTROL_MUX_S3)
-                             
-    # Setup keyboard multiplexers with new configuration
-    keyboard_l1a = Multiplexer(HWConstants.KEYBOARD_L1A_MUX_SIG, HWConstants.KEYBOARD_L1A_MUX_S0,
-                              HWConstants.KEYBOARD_L1A_MUX_S1, HWConstants.KEYBOARD_L1A_MUX_S2,
-                              HWConstants.KEYBOARD_L1A_MUX_S3)
-    keyboard_l1b = Multiplexer(HWConstants.KEYBOARD_L1B_MUX_SIG, HWConstants.KEYBOARD_L1B_MUX_S0,
-                              HWConstants.KEYBOARD_L1B_MUX_S1, HWConstants.KEYBOARD_L1B_MUX_S2,
-                              HWConstants.KEYBOARD_L1B_MUX_S3)
-                              
-    keyboard = KeyboardHandler(keyboard_l1a, keyboard_l1b, 
-                             HWConstants.KEYBOARD_L2_MUX_S0, HWConstants.KEYBOARD_L2_MUX_S1,
-                             HWConstants.KEYBOARD_L2_MUX_S2, HWConstants.KEYBOARD_L2_MUX_S3)
-    
-    # Initialize rotary encoders with direct GPIO pins
-    rotary_handler = RotaryEncoderHandler(
-        HWConstants.OCTAVE_ENC_CLK,
-        HWConstants.OCTAVE_ENC_DT,
-        HWConstants.INSTRUMENT_ENC_CLK,
-        HWConstants.INSTRUMENT_ENC_DT
-    )
-    
-    pot_handler = PotentiometerHandler(control_mux)
+class Bartleby:
+    def __init__(self):
+        # System components (initialized in setup)
+        self.hardware = None
+        self.audio = None
+        self.midi = None
+        self.synth = None
+        self.current_instrument = None
+        
+        # Timing state
+        self.current_time = 0
+        self.last_pot_scan = 0
+        self.last_encoder_scan = 0
+        
+        # Run setup
+        self._setup_hardware()
+        self._setup_audio()
+        self._setup_instruments()
+        self._setup_initial_state()
+        
+    def _setup_hardware(self):
+        """Initialize all hardware components"""
+        self.hardware = {
+            'control_mux': Multiplexer(
+                HWConstants.CONTROL_MUX_SIG,
+                HWConstants.CONTROL_MUX_S0,
+                HWConstants.CONTROL_MUX_S1,
+                HWConstants.CONTROL_MUX_S2,
+                HWConstants.CONTROL_MUX_S3
+            ),
+            'keyboard': self._setup_keyboard(),
+            'encoders': RotaryEncoderHandler(
+                HWConstants.OCTAVE_ENC_CLK,
+                HWConstants.OCTAVE_ENC_DT,
+                HWConstants.INSTRUMENT_ENC_CLK,
+                HWConstants.INSTRUMENT_ENC_DT
+            )
+        }
+        
+        # Create pot handler after mux is ready
+        self.hardware['pots'] = PotentiometerHandler(self.hardware['control_mux'])
+        time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
 
-    # Setup Audio Output Manager
-    audio_output_manager = SynthAudioOutputManager()
+    def _setup_keyboard(self):
+        """Initialize keyboard multiplexers and handler"""
+        keyboard_l1a = Multiplexer(
+            HWConstants.KEYBOARD_L1A_MUX_SIG,
+            HWConstants.KEYBOARD_L1A_MUX_S0,
+            HWConstants.KEYBOARD_L1A_MUX_S1,
+            HWConstants.KEYBOARD_L1A_MUX_S2,
+            HWConstants.KEYBOARD_L1A_MUX_S3
+        )
+        
+        keyboard_l1b = Multiplexer(
+            HWConstants.KEYBOARD_L1B_MUX_SIG,
+            HWConstants.KEYBOARD_L1B_MUX_S0,
+            HWConstants.KEYBOARD_L1B_MUX_S1,
+            HWConstants.KEYBOARD_L1B_MUX_S2,
+            HWConstants.KEYBOARD_L1B_MUX_S3
+        )
+        
+        return KeyboardHandler(
+            keyboard_l1a,
+            keyboard_l1b,
+            HWConstants.KEYBOARD_L2_MUX_S0,
+            HWConstants.KEYBOARD_L2_MUX_S1,
+            HWConstants.KEYBOARD_L2_MUX_S2,
+            HWConstants.KEYBOARD_L2_MUX_S3
+        )
 
-    # Initialize instruments
-    ElectricOrgan()
-    Piano()
-    BendableOrgan()
+    def _setup_audio(self):
+        """Initialize audio and synthesis components"""
+        
+        self.audio = SynthAudioOutputManager()
+        self.synth = Synthesizer(self.audio)
+        self.midi = MidiLogic()
 
-    # Setup MIDI and Synthesizer
-    midi_logic = MidiLogic()
-    synthesizer = Synthesizer(audio_output_manager)
+    def _setup_instruments(self):
+        """Initialize instrument templates and set default"""
+        # Create instruments in specific order for rotary selection
+        self.current_instrument = ElectricOrgan()  # Default instrument
+        Piano()  # Add to available instruments
+        BendableOrgan()  # Add to available instruments
+        
+        # Configure systems with initial instrument
+        self.synth.set_instrument(self.current_instrument)
+        self.midi.note_processor.set_instrument(self.current_instrument)
 
-    print("Starting PicoSynth (҂◡_◡) ᕤ")
+    def _setup_initial_state(self):
+        """Set initial system state"""
+        # Reset all encoders
+        self.hardware['encoders'].reset_all_encoder_positions()
+        
+        # Set initial octave
+        self.midi.note_processor.set_octave(0)
+        
+        # Set initial volume from pot 0
+        initial_volume = self.hardware['pots'].normalize_value(
+            self.hardware['control_mux'].read_channel(0)
+        )
+        self.audio.set_volume(initial_volume)
+        
+        print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
 
-    # Set initial volume based on pot 0
-    initial_volume = pot_handler.normalize_value(control_mux.read_channel(0))
-    audio_output_manager.set_volume(initial_volume)
+    def _handle_encoder_events(self, encoder_events):
+        """Process encoder state changes"""
+        for event in encoder_events:
+            if event[0] == 'rotation':
+                encoder_id, direction = event[1:3]
+                if encoder_id == 0:  # Octave control
+                    self.midi.handle_octave_shift(direction)
+                    print(f"Octave shifted {direction}: new position {self.hardware['encoders'].get_encoder_position(0)}")
+                elif encoder_id == 1:  # Instrument selection
+                    # Get new instrument and update all systems
+                    from instruments import Instrument
+                    self.current_instrument = Instrument.handle_instrument_change(direction)
+                    self.synth.set_instrument(self.current_instrument)
+                    print(f"Instrument changed to {self.current_instrument.name}")
 
-    # Set initial octave to 0
-    midi_logic.note_processor.set_octave(0)
-    
-    # Initialize encoders
-    rotary_handler.reset_all_encoder_positions()
-    
-    # Set and apply the initial instrument
-    current_instrument = Instrument.get_current_instrument()
-    synthesizer.set_instrument(current_instrument)
-
-    # Initialize timing
-    current_time = time.monotonic()
-    last_pot_scan = current_time
-    last_encoder_scan = current_time
-
-    # Initial states
-    changed_keys = []
-    changed_pots = []
-    encoder_events = []
-
-    while True:
-        current_time = time.monotonic()
+    def process_hardware(self):
+        """Read and process all hardware inputs"""
+        self.current_time = time.monotonic()
+        changes = {
+            'keys': [],
+            'pots': [],
+            'encoders': []
+        }
         
         # Always read keys at full speed
-        changed_keys = keyboard.read_keys()
+        changes['keys'] = self.hardware['keyboard'].read_keys()
         
         # Read pots at medium interval
-        if current_time - last_pot_scan >= Constants.POT_SCAN_INTERVAL:
-            changed_pots = pot_handler.read_pots()
-            if changed_pots:
-                for pot_id, old_value, new_value in changed_pots[:]:
+        if self.current_time - self.last_pot_scan >= Constants.POT_SCAN_INTERVAL:
+            changes['pots'] = self.hardware['pots'].read_pots()
+            if changes['pots']:
+                # Handle volume pot (pot 0) separately
+                for pot_id, old_value, new_value in changes['pots'][:]:
                     if pot_id == 0:
-                        audio_output_manager.update_volume(new_value)
-                        changed_pots.remove((pot_id, old_value, new_value))
-            last_pot_scan = current_time
+                        self.audio.update_volume(new_value)
+                        changes['pots'].remove((pot_id, old_value, new_value))
+            self.last_pot_scan = self.current_time
         
-        # Read encoders at fastest interval now that we're using direct GPIO
-        if current_time - last_encoder_scan >= 0.001:  # 1ms scan interval
-            encoder_events = []
-            for i in range(rotary_handler.num_encoders):
-                new_events = rotary_handler.read_encoder(i)
+        # Read encoders at fastest interval
+        if self.current_time - self.last_encoder_scan >= Constants.ENCODER_SCAN_INTERVAL:
+            for i in range(self.hardware['encoders'].num_encoders):
+                new_events = self.hardware['encoders'].read_encoder(i)
                 if new_events:
-                    encoder_events.extend(new_events)
-                    if new_events[0][0] == 'rotation':
-                        encoder_id, direction = new_events[0][1:3]
-                        if encoder_id == 0:  # Octave control
-                            midi_logic.handle_octave_shift(direction)
-                            print(f"Octave shifted {direction}: new position {rotary_handler.get_encoder_position(0)}")
-                        elif encoder_id == 1:  # Instrument selection
-                            new_instrument = Instrument.handle_instrument_change(direction)
-                            synthesizer.set_instrument(new_instrument)
-                            current_instrument = new_instrument
-                            print(f"Instrument changed {direction}: new position {rotary_handler.get_encoder_position(1)}")
-            last_encoder_scan = current_time
-
-        # Process MIDI and synth updates only if we have changes
-        if changed_keys or changed_pots or encoder_events:
-            midi_events = midi_logic.update(changed_keys, changed_pots, current_instrument.get_configuration())
-            processed_events = midi_logic.process_and_send_midi_events(midi_events)
+                    changes['encoders'].extend(new_events)
+            if changes['encoders']:
+                self._handle_encoder_events(changes['encoders'])
+            self.last_encoder_scan = self.current_time
             
-            for event in processed_events:
-                synthesizer.process_midi_event(event)
-            synthesizer.update(processed_events)
+        return changes
 
-        time.sleep(0.001)  # Prevent CPU overload
+    def update(self):
+        """Main update loop - returns False if should stop"""
+        try:
+            # Process all hardware
+            changes = self.process_hardware()
+            
+            # Only process MIDI/synth if we have changes
+            if any(changes.values()):
+                # Generate MIDI events
+                midi_events = self.midi.update(
+                    changes['keys'],
+                    changes['pots'],
+                    self.current_instrument.get_configuration()
+                )
+                
+                # Process MIDI events
+                processed_events = self.midi.process_and_send_midi_events(midi_events)
+                
+                # Update synthesizer
+                for event in processed_events:
+                    self.synth.process_midi_event(event)
+                self.synth.update(processed_events)
+            
+            return True
+            
+        except KeyboardInterrupt:
+            return False
+        except Exception as e:
+            print(f"Error in main loop: {str(e)}")
+            return False
+
+    def run(self):
+        """Main run loop"""
+        try:
+            while self.update():
+                time.sleep(Constants.MAIN_LOOP_INTERVAL)
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean shutdown of all systems"""
+        if self.synth:
+            self.synth.stop()
+        print("\nBartleby goes to sleep... (◡︵◡)")
+
+def main():
+    synth = Bartleby()
+    synth.run()
 
 if __name__ == "__main__":
     main()
