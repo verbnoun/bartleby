@@ -7,32 +7,37 @@ class Constants:
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1
-
     
     # Pin Definitions
-    ROTENC_MUX_SIG = board.GP28
-    ROTENC_MUX_S0 = board.GP3
-    ROTENC_MUX_S1 = board.GP4
-    ROTENC_MUX_S2 = board.GP5
-    ROTENC_MUX_S3 = board.GP6
- 
-    POT_MUX_SIG = board.GP27
-    POT_MUX_S0 = board.GP7
-    POT_MUX_S1 = board.GP8
-    POT_MUX_S2 = board.GP9
-    POT_MUX_S3 = board.GP10
-    
-    KEYBOARD_L1_MUX_SIG = board.GP26
-    KEYBOARD_L1_MUX_S0 = board.GP11
-    KEYBOARD_L1_MUX_S1 = board.GP12
-    KEYBOARD_L1_MUX_S2 = board.GP13
-    KEYBOARD_L1_MUX_S3 = board.GP14
+    KEYBOARD_L1A_MUX_SIG = board.GP26
+    KEYBOARD_L1A_MUX_S0 = board.GP3
+    KEYBOARD_L1A_MUX_S1 = board.GP4
+    KEYBOARD_L1A_MUX_S2 = board.GP5
+    KEYBOARD_L1A_MUX_S3 = board.GP6
 
-    KEYBOARD_L2_MUX_S0 = board.GP16
-    KEYBOARD_L2_MUX_S1 = board.GP17
-    KEYBOARD_L2_MUX_S2 = board.GP18
-    KEYBOARD_L2_MUX_S3 = board.GP19
+    KEYBOARD_L1B_MUX_SIG = board.GP27
+    KEYBOARD_L1B_MUX_S0 = board.GP7
+    KEYBOARD_L1B_MUX_S1 = board.GP8
+    KEYBOARD_L1B_MUX_S2 = board.GP9
+    KEYBOARD_L1B_MUX_S3 = board.GP10
+
+    KEYBOARD_L2_MUX_S0 = board.GP11
+    KEYBOARD_L2_MUX_S1 = board.GP12
+    KEYBOARD_L2_MUX_S2 = board.GP13
+    KEYBOARD_L2_MUX_S3 = board.GP14
+
+    CONTROL_MUX_SIG = board.GP28
+    CONTROL_MUX_S0 = board.GP16
+    CONTROL_MUX_S1 = board.GP17
+    CONTROL_MUX_S2 = board.GP18
+    CONTROL_MUX_S3 = board.GP19
     
+    # Encoder GPIO Pins
+    OCTAVE_ENC_CLK = board.GP20
+    OCTAVE_ENC_DT = board.GP21
+    INSTRUMENT_ENC_CLK = board.GP22
+    INSTRUMENT_ENC_DT = board.GP15
+
     # Potentiometer Constants
     POT_THRESHOLD = 800
     POT_LOWER_TRIM = 0.05
@@ -95,7 +100,7 @@ class KeyMultiplexer:
         raw_values = []
         for i in range(4):
             self.select_channel(1, i)  # Select a level 1 channel
-            # time.sleep(0.001)  # Allow the mux to settle
+            time.sleep(0.001)  # Allow the mux to settle
             
             # Determine the number of channels to scan on MUX3 (level 2)
             channels_to_scan = 16 if i < 3 else 2  # Last MUX only needs 2 channels
@@ -110,14 +115,27 @@ class KeyMultiplexer:
         return raw_values
 
 class RotaryEncoderHandler:
-    def __init__(self, multiplexer, num_encoders=4):
-        self.multiplexer = multiplexer
-        self.num_encoders = num_encoders
-        self.clk_last_states = [False] * num_encoders
-        self.encoder_positions = [0] * num_encoders
-        self.channel_read_delay = 0.0001
+    def __init__(self, octave_clk_pin, octave_dt_pin, instrument_clk_pin, instrument_dt_pin):
+        # Create pins for each encoder
+        self.encoder_pins = [
+            (digitalio.DigitalInOut(octave_clk_pin), digitalio.DigitalInOut(octave_dt_pin)),
+            (digitalio.DigitalInOut(instrument_clk_pin), digitalio.DigitalInOut(instrument_dt_pin))
+        ]
+        
+        # Configure all pins as inputs with pull-ups
+        for clk_pin, dt_pin in self.encoder_pins:
+            for pin in (clk_pin, dt_pin):
+                pin.direction = digitalio.Direction.INPUT
+                pin.pull = digitalio.Pull.UP
+        
+        self.num_encoders = 2
         self.min_position = 0
         self.max_position = 3  # 4 modes (0-3)
+        
+        # Initialize state tracking
+        self.encoder_positions = [0] * self.num_encoders
+        self.last_states = [(True, True)] * self.num_encoders  # Store both CLK and DT states
+        
         self.reset_all_encoder_positions()
 
     def reset_all_encoder_positions(self):
@@ -125,37 +143,51 @@ class RotaryEncoderHandler:
             self.reset_encoder_position(i)
 
     def reset_encoder_position(self, encoder_num):
-        self.encoder_positions[encoder_num] = 0
-        self.clk_last_states[encoder_num] = False
+        if 0 <= encoder_num < self.num_encoders:
+            self.encoder_positions[encoder_num] = 0
+            # Read and store initial states
+            clk_pin, dt_pin = self.encoder_pins[encoder_num]
+            self.last_states[encoder_num] = (clk_pin.value, dt_pin.value)
 
     def read_encoder(self, encoder_num):
+        if not 0 <= encoder_num < self.num_encoders:
+            return []
+
         events = []
-        base_channel = encoder_num * 3
-
-        clk_state = self._read_digital(base_channel)
-        time.sleep(self.channel_read_delay)
-        dt_state = self._read_digital(base_channel + 1)
-        time.sleep(self.channel_read_delay)
-
-        # print(f"ENC {encoder_num}: CLK={clk_state} DT={dt_state}")
-
-        if clk_state != self.clk_last_states[encoder_num]:
-            direction = -1 if dt_state != clk_state else 1
-            new_position = self.encoder_positions[encoder_num] + direction
-            new_position = max(self.min_position, min(self.max_position, new_position))
-            self.encoder_positions[encoder_num] = new_position
-            events.append(('rotation', encoder_num, direction, new_position))
-            # self._log_rotation(encoder_num, direction)
-
-        self.clk_last_states[encoder_num] = clk_state
+        clk_pin, dt_pin = self.encoder_pins[encoder_num]
+        
+        # Read current states
+        clk_state = clk_pin.value
+        dt_state = dt_pin.value
+        
+        # Get previous states
+        last_clk, last_dt = self.last_states[encoder_num]
+        
+        # Only process if CLK has changed
+        if clk_state != last_clk:
+            # Determine direction based on CLK and DT states
+            if clk_state == False:  # CLK falling edge
+                direction = 1 if dt_state != last_dt else -1
+                
+                # Update position with bounds checking
+                current_pos = self.encoder_positions[encoder_num]
+                new_pos = max(self.min_position, min(self.max_position, 
+                                                   current_pos + direction))
+                
+                # Only generate event if position actually changed
+                if new_pos != current_pos:
+                    self.encoder_positions[encoder_num] = new_pos
+                    events.append(('rotation', encoder_num, direction, new_pos))
+        
+        # Save current states for next iteration
+        self.last_states[encoder_num] = (clk_state, dt_state)
+        
         return events
 
-    def _read_digital(self, channel):
-        value = self.multiplexer.read_channel(channel)
-        return value > 32767
-
     def get_encoder_position(self, encoder_num):
-        return self.encoder_positions[encoder_num]
+        if 0 <= encoder_num < self.num_encoders:
+            return self.encoder_positions[encoder_num]
+        return 0
 
 class PotentiometerHandler:
     def __init__(self, multiplexer):
@@ -167,26 +199,21 @@ class PotentiometerHandler:
     def normalize_value(self, value):
         clamped_value = max(min(value, Constants.ADC_MAX), Constants.ADC_MIN)
         normalized = (clamped_value - Constants.ADC_MIN) / (Constants.ADC_MAX - Constants.ADC_MIN)
-        
         if normalized < Constants.POT_LOWER_TRIM:
             normalized = 0
         elif normalized > (1 - Constants.POT_UPPER_TRIM):
             normalized = 1
         else:
             normalized = (normalized - Constants.POT_LOWER_TRIM) / (1 - Constants.POT_LOWER_TRIM - Constants.POT_UPPER_TRIM)
-        
         return round(normalized, 5)
 
     def read_pots(self):
         changed_pots = []
-
         for i in range(Constants.NUM_POTS):
+            # Pots are on channels 0-9
             raw_value = self.multiplexer.read_channel(i)
-
-            # print(f"POT {i}: {raw_value}")
-
             change = abs(raw_value - self.last_reported_values[i])
-
+            
             if self.is_active[i]:
                 if change != 0:
                     normalized_old = self.normalize_value(self.last_reported_values[i])
@@ -205,68 +232,115 @@ class PotentiometerHandler:
                 self.last_reported_values[i] = raw_value
                 self.last_change[i] = change
                 pot_values = [self.normalize_value(val) for val in self.last_reported_values]
-
+                
         return changed_pots
 
 class KeyboardHandler:
-    def __init__(self, key_multiplexer):
-        self.key_multiplexer = key_multiplexer
-        self.channels = {}
-        self.key_states = [(0, 0)] * Constants.NUM_KEYS 
+    def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
+        self.l1a_mux = l1a_multiplexer
+        self.l1b_mux = l1b_multiplexer
+        
+        # Initialize level 2 select pins following KeyMultiplexer pattern
+        self.l2_select_pins = [
+            digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
+        ]
+        for pin in self.l2_select_pins:
+            pin.direction = digitalio.Direction.OUTPUT
+            pin.value = False
+            
+        self.key_states = [(0, 0)] * Constants.NUM_KEYS
         self.active_keys = []
         self.key_hardware_data = {}
-
+        
     def adc_to_resistance(self, adc_value):
         voltage = (adc_value / Constants.ADC_MAX) * 3.3
         if voltage >= 3.0:  # More lenient threshold for "no touch"
-           return float('inf')
+            return float('inf')
         return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
-
+        
     def normalize_resistance(self, resistance):
         if resistance >= Constants.MAX_VK_RESISTANCE:
             return 0
         if resistance <= Constants.MIN_VK_RESISTANCE:
             return 1
         return (Constants.MAX_VK_RESISTANCE - resistance) / (Constants.MAX_VK_RESISTANCE - Constants.MIN_VK_RESISTANCE)
-
+        
+    def set_l2_channel(self, channel):
+        for i, pin in enumerate(self.l2_select_pins):
+            pin.value = (channel >> i) & 1
+            
     def read_keys(self):
         changed_keys = []
         current_active_keys = []
         self.key_hardware_data.clear()
-
-        raw_values = self.key_multiplexer.scan_keyboard()
         
-        for i in range(Constants.NUM_KEYS):  
-            left_channel = i * 2
-            right_channel = i * 2 + 1
+        # Read first 5 keys (1-5) from L2 Mux A through L1 Mux A channel 0
+        key_index = 0  # Start with key 1 (zero-based index)
+        for channel in range(1, 11, 2):  # Channels 1-10 in pairs
+            self.set_l2_channel(channel)
+            time.sleep(0.0001)  # Allow mux to settle
+            left_value = self.l1a_mux.read_channel(0)  # Read through L1A channel 0
             
-            if left_channel < len(raw_values) and right_channel < len(raw_values):
-                left_resistance = self.adc_to_resistance(raw_values[left_channel])
-                right_resistance = self.adc_to_resistance(raw_values[right_channel])
-
-                # print(f"Key {i}: L={left_resistance}Ω R={right_resistance}Ω")
-
-                left_normalized = self.normalize_resistance(left_resistance)
-                right_normalized = self.normalize_resistance(right_resistance)
-
-                if left_normalized > 0.1 or right_normalized > 0.1:
-                    current_active_keys.append(i)
-
-                self.key_hardware_data[i] = (left_normalized, right_normalized)
-
-                if (left_normalized, right_normalized) != self.key_states[i]:
-                    self.key_states[i] = (left_normalized, right_normalized)
-                    changed_keys.append((i, left_normalized, right_normalized))
-
+            self.set_l2_channel(channel + 1)
+            time.sleep(0.0001)
+            right_value = self.l1a_mux.read_channel(0)
+            
+            self._process_key_reading(key_index, left_value, right_value, current_active_keys, changed_keys)
+            key_index += 1
+            
+        # Read next 7 keys (6-12) directly from L1 Mux A
+        for channel in range(1, 15, 2):  # Channels 1-14 in pairs
+            left_value = self.l1a_mux.read_channel(channel)
+            right_value = self.l1a_mux.read_channel(channel + 1)
+            self._process_key_reading(key_index, left_value, right_value, current_active_keys, changed_keys)
+            key_index += 1
+            
+        # Read next 7 keys (13-19) directly from L1 Mux B
+        for channel in range(1, 15, 2):  # Channels 1-14 in pairs
+            left_value = self.l1b_mux.read_channel(channel)
+            right_value = self.l1b_mux.read_channel(channel + 1)
+            self._process_key_reading(key_index, left_value, right_value, current_active_keys, changed_keys)
+            key_index += 1
+            
+        # Read final 6 keys (20-25) from L2 Mux B through L1 Mux B channel 0
+        for channel in range(1, 13, 2):  # Channels 1-12 in pairs
+            self.set_l2_channel(channel)
+            time.sleep(0.0001)
+            left_value = self.l1b_mux.read_channel(0)  # Read through L1B channel 0
+            
+            self.set_l2_channel(channel + 1)
+            time.sleep(0.0001)
+            right_value = self.l1b_mux.read_channel(0)
+            
+            self._process_key_reading(key_index, left_value, right_value, current_active_keys, changed_keys)
+            key_index += 1
+            
         self._update_active_keys(current_active_keys)
         return changed_keys
-
+        
+    def _process_key_reading(self, key_index, left_value, right_value, current_active_keys, changed_keys):
+        left_resistance = self.adc_to_resistance(left_value)
+        right_resistance = self.adc_to_resistance(right_value)
+        
+        left_normalized = self.normalize_resistance(left_resistance)
+        right_normalized = self.normalize_resistance(right_resistance)
+        
+        if left_normalized > 0.1 or right_normalized > 0.1:
+            # print(f"Key {key_index}: L={left_value} R={right_value}")
+            current_active_keys.append(key_index)
+            
+        self.key_hardware_data[key_index] = (left_normalized, right_normalized)
+        
+        if (left_normalized, right_normalized) != self.key_states[key_index]:
+            self.key_states[key_index] = (left_normalized, right_normalized)
+            changed_keys.append((key_index, left_normalized, right_normalized))
+            
     def _update_active_keys(self, current_active_keys):
         self.active_keys = current_active_keys
-
-    def _format_key_hardware_data(self):
+        
+    def format_key_hardware_data(self):
         return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}
-
+        
     @staticmethod
     def calculate_pitch_bend(left_pressure, right_pressure):
         pressure_diff = right_pressure - left_pressure

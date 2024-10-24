@@ -416,20 +416,31 @@ class Synthesizer:
         return 440 * (2 ** ((midi_note - 69) / 12))
 
 def main():
-    # Setup hardware
-    rotary_mux = Multiplexer(HWConstants.ROTENC_MUX_SIG, HWConstants.ROTENC_MUX_S0, 
-                         HWConstants.ROTENC_MUX_S1, HWConstants.ROTENC_MUX_S2, HWConstants.ROTENC_MUX_S3)
-    pot_mux = Multiplexer(HWConstants.POT_MUX_SIG, HWConstants.POT_MUX_S0, 
-                          HWConstants.POT_MUX_S1, HWConstants.POT_MUX_S2, HWConstants.POT_MUX_S3)
-    keyboard_mux = KeyMultiplexer(HWConstants.KEYBOARD_L1_MUX_SIG, HWConstants.KEYBOARD_L1_MUX_S0, 
-                                    HWConstants.KEYBOARD_L1_MUX_S1, HWConstants.KEYBOARD_L1_MUX_S2, 
-                                    HWConstants.KEYBOARD_L1_MUX_S3, HWConstants.KEYBOARD_L2_MUX_S0, 
-                                    HWConstants.KEYBOARD_L2_MUX_S1, HWConstants.KEYBOARD_L2_MUX_S2, 
-                                    HWConstants.KEYBOARD_L2_MUX_S3)
-
-    rotary_handler = RotaryEncoderHandler(rotary_mux)
-    pot_handler = PotentiometerHandler(pot_mux)
-    keyboard = KeyboardHandler(keyboard_mux)
+    # Setup hardware with consolidated multiplexer (for pots only now)
+    control_mux = Multiplexer(HWConstants.CONTROL_MUX_SIG, HWConstants.CONTROL_MUX_S0, 
+                             HWConstants.CONTROL_MUX_S1, HWConstants.CONTROL_MUX_S2, HWConstants.CONTROL_MUX_S3)
+                             
+    # Setup keyboard multiplexers with new configuration
+    keyboard_l1a = Multiplexer(HWConstants.KEYBOARD_L1A_MUX_SIG, HWConstants.KEYBOARD_L1A_MUX_S0,
+                              HWConstants.KEYBOARD_L1A_MUX_S1, HWConstants.KEYBOARD_L1A_MUX_S2,
+                              HWConstants.KEYBOARD_L1A_MUX_S3)
+    keyboard_l1b = Multiplexer(HWConstants.KEYBOARD_L1B_MUX_SIG, HWConstants.KEYBOARD_L1B_MUX_S0,
+                              HWConstants.KEYBOARD_L1B_MUX_S1, HWConstants.KEYBOARD_L1B_MUX_S2,
+                              HWConstants.KEYBOARD_L1B_MUX_S3)
+                              
+    keyboard = KeyboardHandler(keyboard_l1a, keyboard_l1b, 
+                             HWConstants.KEYBOARD_L2_MUX_S0, HWConstants.KEYBOARD_L2_MUX_S1,
+                             HWConstants.KEYBOARD_L2_MUX_S2, HWConstants.KEYBOARD_L2_MUX_S3)
+    
+    # Initialize rotary encoders with direct GPIO pins
+    rotary_handler = RotaryEncoderHandler(
+        HWConstants.OCTAVE_ENC_CLK,
+        HWConstants.OCTAVE_ENC_DT,
+        HWConstants.INSTRUMENT_ENC_CLK,
+        HWConstants.INSTRUMENT_ENC_DT
+    )
+    
+    pot_handler = PotentiometerHandler(control_mux)
 
     # Setup Audio Output Manager
     audio_output_manager = SynthAudioOutputManager()
@@ -446,7 +457,7 @@ def main():
     print("Starting PicoSynth (҂◡_◡) ᕤ")
 
     # Set initial volume based on pot 0
-    initial_volume = pot_handler.normalize_value(pot_mux.read_channel(0))
+    initial_volume = pot_handler.normalize_value(control_mux.read_channel(0))
     audio_output_manager.set_volume(initial_volume)
 
     # Set initial octave to 0
@@ -485,8 +496,8 @@ def main():
                         changed_pots.remove((pot_id, old_value, new_value))
             last_pot_scan = current_time
         
-        # Read encoders at slowest interval
-        if current_time - last_encoder_scan >= Constants.ENCODER_SCAN_INTERVAL:
+        # Read encoders at fastest interval now that we're using direct GPIO
+        if current_time - last_encoder_scan >= 0.001:  # 1ms scan interval
             encoder_events = []
             for i in range(rotary_handler.num_encoders):
                 new_events = rotary_handler.read_encoder(i)
@@ -496,10 +507,12 @@ def main():
                         encoder_id, direction = new_events[0][1:3]
                         if encoder_id == 0:  # Octave control
                             midi_logic.handle_octave_shift(direction)
+                            print(f"Octave shifted {direction}: new position {rotary_handler.get_encoder_position(0)}")
                         elif encoder_id == 1:  # Instrument selection
                             new_instrument = Instrument.handle_instrument_change(direction)
                             synthesizer.set_instrument(new_instrument)
                             current_instrument = new_instrument
+                            print(f"Instrument changed {direction}: new position {rotary_handler.get_encoder_position(1)}")
             last_encoder_scan = current_time
 
         # Process MIDI and synth updates only if we have changes
