@@ -280,7 +280,7 @@ class SynthAudioOutputManager:
     def update_volume(self, pot_value):
         old_volume = self.volume
         self.set_volume(pot_value)
-        print(f"P0: Volume: {old_volume:.2f} -> {pot_value:.2f}")
+        # print(f"P0: Volume: {old_volume:.2f} -> {pot_value:.2f}")
 
 class Synthesizer:
     def __init__(self, audio_output_manager):
