@@ -86,6 +86,7 @@ class SynthVoiceManager:
     def get_active_notes(self):
         return list(self.active_notes.values())
 
+
 class SynthEngine:
     def __init__(self):
         self.lfos = []
@@ -327,11 +328,12 @@ class Synthesizer:
         envelope = self.synth_engine.create_envelope()
         waveform = self.synth_engine.get_waveform(self.instrument.oscillator['waveform'])
         note = self.voice_manager.allocate_voice(key_id, frequency, velocity, envelope, waveform)
-        if self.synth_engine.filter:
-            note.filter = self.synth_engine.filter(self.synth)
-        self.synth.press(note)
-        self._apply_amplitude_scaling()
-    
+        
+        if note is not None:
+            if self.synth_engine.filter:
+                note.filter = self.synth_engine.filter(self.synth)
+            self.synth.press(note)
+            self._apply_amplitude_scaling()
 
     def stop_note(self, midi_note, velocity, key_id):
         note = self.voice_manager.release_voice(key_id)
@@ -366,7 +368,7 @@ class Synthesizer:
                 scaled_value = min_val + normalized_value * (max_val - min_val)
                 
                 # Print pot change information
-                print(f"P{pot_index}: {param_name}: {self.current_midi_values.get(cc_number, 0)/127.0:.2f} -> {normalized_value:.2f}")
+                # print(f"P{pot_index}: {param_name}: {self.current_midi_values.get(cc_number, 0)/127.0:.2f} -> {normalized_value:.2f}")
                 
                 if param_name == 'Filter Cutoff':
                     self.synth_engine.set_filter_cutoff(scaled_value)
