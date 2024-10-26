@@ -1,6 +1,7 @@
 import board
 import time
 import digitalio
+import rotaryio
 import analogio
 
 class Constants:
@@ -27,16 +28,16 @@ class Constants:
     KEYBOARD_L2_MUX_S3 = board.GP14
 
     CONTROL_MUX_SIG = board.GP28
-    CONTROL_MUX_S0 = board.GP16
-    CONTROL_MUX_S1 = board.GP17
-    CONTROL_MUX_S2 = board.GP18
+    CONTROL_MUX_S0 = board.GP22
+    CONTROL_MUX_S1 = board.GP21
+    CONTROL_MUX_S2 = board.GP20
     CONTROL_MUX_S3 = board.GP19
     
     # Encoder GPIO Pins
-    OCTAVE_ENC_CLK = board.GP20
-    OCTAVE_ENC_DT = board.GP21
-    INSTRUMENT_ENC_CLK = board.GP22
-    INSTRUMENT_ENC_DT = board.GP15
+    OCTAVE_ENC_CLK = board.GP17
+    OCTAVE_ENC_DT = board.GP18
+    INSTRUMENT_ENC_CLK = board.GP15
+    INSTRUMENT_ENC_DT = board.GP16
 
     # Potentiometer Constants
     POT_THRESHOLD = 1500  # Threshold for initial pot activation
@@ -122,28 +123,24 @@ class KeyMultiplexer:
         
         return raw_values
 
+import rotaryio
+
 class RotaryEncoderHandler:
     def __init__(self, octave_clk_pin, octave_dt_pin, instrument_clk_pin, instrument_dt_pin):
-        # Create pins for each encoder
-        self.encoder_pins = [
-            (digitalio.DigitalInOut(octave_clk_pin), digitalio.DigitalInOut(octave_dt_pin)),
-            (digitalio.DigitalInOut(instrument_clk_pin), digitalio.DigitalInOut(instrument_dt_pin))
+        # Initialize encoders using rotaryio
+        self.encoders = [
+            rotaryio.IncrementalEncoder(octave_clk_pin, octave_dt_pin, divisor=2),
+            rotaryio.IncrementalEncoder(instrument_clk_pin, instrument_dt_pin, divisor=2)
         ]
         
-        # Configure all pins as inputs with pull-ups
-        for clk_pin, dt_pin in self.encoder_pins:
-            for pin in (clk_pin, dt_pin):
-                pin.direction = digitalio.Direction.INPUT
-                pin.pull = digitalio.Pull.UP
-        
-        self.num_encoders = 2
+        self.num_encoders = len(self.encoders)
         self.min_position = 0
         self.max_position = 3  # 4 modes (0-3)
-        
+
         # Initialize state tracking
         self.encoder_positions = [0] * self.num_encoders
-        self.last_states = [(True, True)] * self.num_encoders  # Store both CLK and DT states
-        
+        self.last_positions = [encoder.position for encoder in self.encoders]
+
         self.reset_all_encoder_positions()
 
     def reset_all_encoder_positions(self):
@@ -152,44 +149,38 @@ class RotaryEncoderHandler:
 
     def reset_encoder_position(self, encoder_num):
         if 0 <= encoder_num < self.num_encoders:
+            self.encoders[encoder_num].position = 0
             self.encoder_positions[encoder_num] = 0
-            # Read and store initial states
-            clk_pin, dt_pin = self.encoder_pins[encoder_num]
-            self.last_states[encoder_num] = (clk_pin.value, dt_pin.value)
+            self.last_positions[encoder_num] = 0
 
     def read_encoder(self, encoder_num):
         if not 0 <= encoder_num < self.num_encoders:
             return []
 
         events = []
-        clk_pin, dt_pin = self.encoder_pins[encoder_num]
+        encoder = self.encoders[encoder_num]
         
-        # Read current states
-        clk_state = clk_pin.value
-        dt_state = dt_pin.value
+        # Read current position
+        current_position = encoder.position
+        last_position = self.last_positions[encoder_num]
+
+        # Check if the encoder position has changed
+        if current_position != last_position:
+            # Calculate direction (-1 for left, +1 for right)
+            direction = 1 if current_position > last_position else -1
+
+            # Update position with bounds checking
+            new_pos = max(self.min_position, min(self.max_position, 
+                                                 self.encoder_positions[encoder_num] + direction))
+            
+            # Only generate event if position actually changed within limits
+            if new_pos != self.encoder_positions[encoder_num]:
+                self.encoder_positions[encoder_num] = new_pos
+                events.append(('rotation', encoder_num, direction, new_pos))
+                print(f"E{encoder_num}: Position: {self.encoder_positions[encoder_num]} -> {new_pos}")
         
-        # Get previous states
-        last_clk, last_dt = self.last_states[encoder_num]
-        
-        # Only process if CLK has changed
-        if clk_state != last_clk:
-            # Determine direction based on CLK and DT states
-            if clk_state == False:  # CLK falling edge
-                direction = 1 if dt_state != last_dt else -1
-                
-                # Update position with bounds checking
-                current_pos = self.encoder_positions[encoder_num]
-                new_pos = max(self.min_position, min(self.max_position, 
-                                                   current_pos + direction))
-                
-                # Only generate event if position actually changed
-                if new_pos != current_pos:
-                    self.encoder_positions[encoder_num] = new_pos
-                    events.append(('rotation', encoder_num, direction, new_pos))
-                    print(f"E{encoder_num}: Position: {current_pos} -> {new_pos}")
-        
-        # Save current states for next iteration
-        self.last_states[encoder_num] = (clk_state, dt_state)
+        # Save the current position for the next read
+        self.last_positions[encoder_num] = current_position
         
         return events
 
@@ -197,6 +188,7 @@ class RotaryEncoderHandler:
         if 0 <= encoder_num < self.num_encoders:
             return self.encoder_positions[encoder_num]
         return 0
+
 
 class PotentiometerHandler:
     def __init__(self, multiplexer):

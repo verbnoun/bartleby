@@ -504,8 +504,8 @@ class Bartleby:
     def _setup_instruments(self):
         """Initialize instrument templates and set default"""
         # Create instruments in specific order for rotary selection
-        self.current_instrument = ElectricOrgan()  # Default instrument
-        Piano()  # Add to available instruments
+        self.current_instrument = Piano()  # Default instrument
+        ElectricOrgan()  # Add to available instruments
         BendableOrgan()  # Add to available instruments
         
         # Configure systems with initial instrument
