@@ -28,10 +28,10 @@ class Constants:
     KEYBOARD_L2_MUX_S3 = board.GP14
 
     CONTROL_MUX_SIG = board.GP28
-    CONTROL_MUX_S0 = board.GP22
-    CONTROL_MUX_S1 = board.GP21
-    CONTROL_MUX_S2 = board.GP20
-    CONTROL_MUX_S3 = board.GP19
+    CONTROL_MUX_S0 = board.GP19
+    CONTROL_MUX_S1 = board.GP20
+    CONTROL_MUX_S2 = board.GP21
+    CONTROL_MUX_S3 = board.GP22
     
     # Encoder GPIO Pins
     OCTAVE_ENC_CLK = board.GP17
@@ -177,7 +177,8 @@ class RotaryEncoderHandler:
             if new_pos != self.encoder_positions[encoder_num]:
                 self.encoder_positions[encoder_num] = new_pos
                 events.append(('rotation', encoder_num, direction, new_pos))
-                print(f"E{encoder_num}: Position: {self.encoder_positions[encoder_num]} -> {new_pos}")
+
+                # print(f"E{encoder_num}: Position: {self.encoder_positions[encoder_num]} -> {new_pos}")
         
         # Save the current position for the next read
         self.last_positions[encoder_num] = current_position
@@ -215,7 +216,7 @@ class PotentiometerHandler:
             raw_value = self.multiplexer.read_channel(i)
             normalized_new = self.normalize_value(raw_value)
             change = abs(raw_value - self.last_reported_values[i])
-            
+
             if self.is_active[i]:
                 # Only report changes if they exceed the change threshold
                 if change > Constants.POT_CHANGE_THRESHOLD:
@@ -328,7 +329,9 @@ class KeyboardHandler:
         right_normalized = self.normalize_resistance(right_resistance)
         
         if left_normalized > 0.1 or right_normalized > 0.1:
+
             # print(f"Key {key_index}: L={left_value} R={right_value}")
+            
             current_active_keys.append(key_index)
             
         self.key_hardware_data[key_index] = (left_normalized, right_normalized)
