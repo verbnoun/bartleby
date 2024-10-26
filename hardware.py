@@ -43,7 +43,7 @@ class Constants:
     POT_CHANGE_THRESHOLD = 400  # Threshold for subsequent changes when pot is active
     POT_LOWER_TRIM = 0.05
     POT_UPPER_TRIM = 0.0
-    NUM_POTS = 10
+    NUM_POTS = 14
     
     # Keyboard Handler Constants
     NUM_KEYS = 25

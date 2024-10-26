@@ -280,7 +280,8 @@ class SynthAudioOutputManager:
     def update_volume(self, pot_value):
         old_volume = self.volume
         self.set_volume(pot_value)
-        # print(f"P0: Volume: {old_volume:.2f} -> {pot_value:.2f}")
+        
+        print(f"P0: Volume: {old_volume:.2f} -> {pot_value:.2f}")
 
 class Synthesizer:
     def __init__(self, audio_output_manager):
@@ -368,7 +369,7 @@ class Synthesizer:
                 scaled_value = min_val + normalized_value * (max_val - min_val)
                 
                 # Print pot change information
-                # print(f"P{pot_index}: {param_name}: {self.current_midi_values.get(cc_number, 0)/127.0:.2f} -> {normalized_value:.2f}")
+                print(f"P{pot_index}: {param_name}: {self.current_midi_values.get(cc_number, 0)/127.0:.2f} -> {normalized_value:.2f}")
                 
                 if param_name == 'Filter Cutoff':
                     self.synth_engine.set_filter_cutoff(scaled_value)
@@ -620,7 +621,7 @@ class Bartleby:
         """Clean shutdown of all systems"""
         if self.synth:
             self.synth.stop()
-        print("\nBartleby goes to sleep... (◡︵◡)")
+        print("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁")
 
 def main():
     synth = Bartleby()
