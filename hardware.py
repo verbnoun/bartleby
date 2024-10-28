@@ -11,33 +11,31 @@ class Constants:
     
     # Pin Definitions
     KEYBOARD_L1A_MUX_SIG = board.GP26
-    KEYBOARD_L1A_MUX_S0 = board.GP3
-    KEYBOARD_L1A_MUX_S1 = board.GP4
-    KEYBOARD_L1A_MUX_S2 = board.GP5
-    KEYBOARD_L1A_MUX_S3 = board.GP6
+    KEYBOARD_L1A_MUX_S0 = board.GP0
+    KEYBOARD_L1A_MUX_S1 = board.GP1
+    KEYBOARD_L1A_MUX_S2 = board.GP2
+    KEYBOARD_L1A_MUX_S3 = board.GP3
 
     KEYBOARD_L1B_MUX_SIG = board.GP27
-    KEYBOARD_L1B_MUX_S0 = board.GP7
-    KEYBOARD_L1B_MUX_S1 = board.GP8
-    KEYBOARD_L1B_MUX_S2 = board.GP9
-    KEYBOARD_L1B_MUX_S3 = board.GP10
+    KEYBOARD_L1B_MUX_S0 = board.GP4
+    KEYBOARD_L1B_MUX_S1 = board.GP5
+    KEYBOARD_L1B_MUX_S2 = board.GP6
+    KEYBOARD_L1B_MUX_S3 = board.GP7
 
-    KEYBOARD_L2_MUX_S0 = board.GP11
-    KEYBOARD_L2_MUX_S1 = board.GP12
-    KEYBOARD_L2_MUX_S2 = board.GP13
-    KEYBOARD_L2_MUX_S3 = board.GP14
+    KEYBOARD_L2_MUX_S0 = board.GP8
+    KEYBOARD_L2_MUX_S1 = board.GP9
+    KEYBOARD_L2_MUX_S2 = board.GP10
+    KEYBOARD_L2_MUX_S3 = board.GP11
 
     CONTROL_MUX_SIG = board.GP28
-    CONTROL_MUX_S0 = board.GP19
-    CONTROL_MUX_S1 = board.GP20
-    CONTROL_MUX_S2 = board.GP21
-    CONTROL_MUX_S3 = board.GP22
+    CONTROL_MUX_S0 = board.GP12
+    CONTROL_MUX_S1 = board.GP13
+    CONTROL_MUX_S2 = board.GP14
+    CONTROL_MUX_S3 = board.GP15
     
     # Encoder GPIO Pins
-    OCTAVE_ENC_CLK = board.GP17
-    OCTAVE_ENC_DT = board.GP18
-    INSTRUMENT_ENC_CLK = board.GP15
-    INSTRUMENT_ENC_DT = board.GP16
+    OCTAVE_ENC_CLK = board.GP20
+    OCTAVE_ENC_DT = board.GP21
 
     # Potentiometer Constants
     POT_THRESHOLD = 1500  # Threshold for initial pot activation
@@ -126,11 +124,10 @@ class KeyMultiplexer:
 import rotaryio
 
 class RotaryEncoderHandler:
-    def __init__(self, octave_clk_pin, octave_dt_pin, instrument_clk_pin, instrument_dt_pin):
+    def __init__(self, octave_clk_pin, octave_dt_pin):
         # Initialize encoders using rotaryio
         self.encoders = [
-            rotaryio.IncrementalEncoder(octave_clk_pin, octave_dt_pin, divisor=2),
-            rotaryio.IncrementalEncoder(instrument_clk_pin, instrument_dt_pin, divisor=2)
+            rotaryio.IncrementalEncoder(octave_clk_pin, octave_dt_pin, divisor=2)
         ]
         
         self.num_encoders = len(self.encoders)
@@ -154,8 +151,8 @@ class RotaryEncoderHandler:
             self.last_positions[encoder_num] = 0
 
     def read_encoder(self, encoder_num):
-        if not 0 <= encoder_num < self.num_encoders:
-            return []
+        events = []
+        encoder = self.encoders[0]  
 
         events = []
         encoder = self.encoders[encoder_num]
