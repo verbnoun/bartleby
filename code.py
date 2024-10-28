@@ -2,7 +2,7 @@ import board
 import busio
 import digitalio
 import time
-import usb_midi
+from adafruit_bus_device.spi_device import SPIDevice
 from hardware import (
     Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
     PotentiometerHandler, Constants as HWConstants
@@ -32,111 +32,208 @@ class Constants:
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
 
-import board
-import busio
-import digitalio
-import time
-
 class SPIHandler:
-    """Handles SPI communication to cartridge"""
-    # Message Types (shared between Bartleby and Candide)
+    """Handles SPI communication for base station with proper sync and timing"""
+    # Protocol markers
+    SYNC_REQUEST = 0xF0
+    SYNC_ACK = 0xF1
     HELLO_BART = 0xA0
     HI_CANDIDE = 0xA1
+    PROTOCOL_VERSION = 0x01
+
+    # States
+    DISCONNECTED = 0
+    SYNC_STARTED = 1
+    SYNC_COMPLETE = 2
+    HANDSHAKE_STARTED = 3
+    CONNECTED = 4
     
     def __init__(self):
-        print("Initializing SPI Handler...")
-        # Configure SPI bus (MIDI Controller is master)
-        self.spi = busio.SPI(
+        print("Initializing SPI Handler (Base Station)...")
+        
+        self.state = self.DISCONNECTED
+        self.sync_attempts = 0
+        self.last_sync_time = 0
+        
+        # Configure detect pin as INPUT for cartridge detection
+        self.detect = digitalio.DigitalInOut(Constants.CART_DETECT)
+        self.detect.direction = digitalio.Direction.INPUT
+        self.detect.pull = digitalio.Pull.DOWN
+        
+        # Configure SPI - Base station is master
+        self.spi_bus = busio.SPI(
             clock=Constants.SPI_CLOCK,
             MOSI=Constants.SPI_MOSI,
             MISO=Constants.SPI_MISO
         )
+        
+        # Configure chip select
         self.cs = digitalio.DigitalInOut(Constants.SPI_CS)
         self.cs.direction = digitalio.Direction.OUTPUT
-        self.cs.value = True  # Active low
+        self.cs.value = True  # Active LOW, start HIGH
         
-        # Configure cartridge detect - now as OUTPUT
-        self.detect = digitalio.DigitalInOut(Constants.CART_DETECT)
-        self.detect.direction = digitalio.Direction.OUTPUT
-        self.detect.value = True  # Show we're alive
+        # Create SPIDevice instance
+        self.spi_device = SPIDevice(
+            self.spi_bus,
+            self.cs,
+            baudrate=1000000,  # 1MHz to match Candide
+            polarity=0,
+            phase=0
+        )
         
-        self.handshake_complete = False
+        self._out_buffer = bytearray(4)
+        self._in_buffer = bytearray(4)
         
-        print(f"SPI Pins: CLK={Constants.SPI_CLOCK}, MOSI={Constants.SPI_MOSI}, MISO={Constants.SPI_MISO}, CS={Constants.SPI_CS}")
-        print(f"Detect Pin: {Constants.CART_DETECT} set HIGH")
-    
-    def check_for_cartridge(self):
-        """Check for cartridge saying hello"""
-        buffer = bytearray(4)
-        while not self.spi.try_lock():
-            pass
-        try:
-            self.cs.value = False
-            self.spi.readinto(buffer)
-            self.cs.value = True
+        print("[Base] SPI initialized, waiting for cartridge")
+
+    def check_connection(self):
+        """Main connection state machine"""
+        current_time = time.monotonic()
+        
+        # Detect state changes
+        cart_present = self.detect.value
+        if cart_present and self.state == self.DISCONNECTED:
+            print("\n[Base] Cartridge detected - Starting sync")
+            self.state = self.SYNC_STARTED
+            self.sync_attempts = 0
+            time.sleep(0.01)  # Give cartridge time to initialize
+            return self._attempt_sync()
             
-            if buffer[0] == self.HELLO_BART:
-                print("Cartridge says: HELLO_BART")
-                self.send_handshake_response()
+        elif not cart_present and self.state != self.DISCONNECTED:
+            print("[Base] Cartridge removed")
+            self.reset_state()
+            return False
+            
+        # Handle existing connection
+        if self.state == self.SYNC_STARTED:
+            if (current_time - self.last_sync_time) > 0.5:  # Retry every 500ms
+                return self._attempt_sync()
+        elif self.state == self.SYNC_COMPLETE:
+            return self._start_handshake()
+        elif self.state == self.CONNECTED:
+            # Periodic connection verification
+            if (current_time - self.last_sync_time) > 1.0:
+                if not self._verify_connection():
+                    print("[Base] Connection verification failed")
+                    self.reset_state()
+                    return False
+                self.last_sync_time = current_time
+                
+        return self.state == self.CONNECTED
+    
+    def _attempt_sync(self):
+        """Attempt clock/protocol sync with cartridge"""
+        self.last_sync_time = time.monotonic()
+        self.sync_attempts += 1
+
+        if self.sync_attempts > 10:
+            print("[Base] Too many sync attempts - resetting")
+            self.reset_state()
+            return False
+
+        try:
+            # Send sync request
+            self._out_buffer = bytearray([self.SYNC_REQUEST, self.PROTOCOL_VERSION, 0, 0])
+            print(f"[Base] Sending: {list(self._out_buffer)}")
+            
+            with self.spi_device as spi:
+                # First write sync request
+                spi.write(self._out_buffer)
+                # Wait for Candide to process
+                time.sleep(0.01)
+                # Then read response
+                spi.readinto(self._in_buffer)
+                
+            print(f"[Base] Received: {list(self._in_buffer)}")
+
+            if (self._in_buffer[0] == self.SYNC_ACK and
+                self._in_buffer[1] == self.PROTOCOL_VERSION):
+                print("[Base] Sync successful!")
+                self.state = self.SYNC_COMPLETE
                 return True
+
         except Exception as e:
-            print(f"SPI read error: {e}")
-        finally:
-            self.spi.unlock()
+            print(f"[Base] Sync error: {str(e)}")
+
         return False
     
-    def send_handshake_response(self):
-        """Send confirmation back to cartridge"""
-        print("Sending: HI_CANDIDE")
-        self.send_midi_message(self.HI_CANDIDE, 0, 0, 0)
-        self.handshake_complete = True
-        print("Handshake complete! Ready for MIDI")
+    def _start_handshake(self):
+        """Begin handshake after successful sync"""
+        try:
+            # Wait for HELLO_BART
+            with self.spi_device as spi:
+                # Read HELLO_BART
+                spi.readinto(self._in_buffer)
+                time.sleep(0.01)  # Wait for Candide to prepare for response
+                
+            if self._in_buffer[0] == self.HELLO_BART:
+                return self._send_hi_candide()
+                    
+        except Exception as e:
+            print(f"[Base] Handshake error: {str(e)}")
+            self.reset_state()
+            
+        return False
+
+    def _send_hi_candide(self):
+        """Complete handshake with HI_CANDIDE response"""
+        try:
+            self._out_buffer = bytearray([self.HI_CANDIDE, 0, 0, 0])
+            
+            with self.spi_device as spi:
+                # Send HI_CANDIDE
+                spi.write(self._out_buffer)
+                time.sleep(0.01)  # Give Candide time to process
+            
+            self.state = self.CONNECTED
+            print("[Base] Connection established!")
+            return True
+                
+        except Exception as e:
+            print(f"[Base] Response error: {str(e)}")
+            self.reset_state()
+            return False
+
+    def _verify_connection(self):
+        """Verify cartridge is still responding"""
+        if self.state != self.CONNECTED:
+            return False
+            
+        try:
+            self._out_buffer = bytearray([self.SYNC_REQUEST, 0, 0, 0])
+            
+            with self.spi_device as spi:
+                # Send sync request
+                spi.write(self._out_buffer)
+                time.sleep(0.01)  # Wait for Candide to process
+                # Read response
+                spi.readinto(self._in_buffer)
+            
+            return self._in_buffer[0] == self.SYNC_ACK
+                
+        except Exception:
+            return False
+
+    def reset_state(self):
+        """Reset to initial state"""
+        self.state = self.DISCONNECTED
+        self.sync_attempts = 0
+        self.cs.value = True
+        print("[Base] Reset to initial state")
 
     def is_ready(self):
-        """Check if handshake is complete"""
-        return self.handshake_complete
+        """Check if connection is established"""
+        return self.state == self.CONNECTED
 
-    def send_midi_message(self, status_byte, data1, data2, data3=0):
-        """Send a 4-byte MIDI message over SPI"""
-        if not self.handshake_complete and status_byte not in [self.HELLO_BART, self.HI_CANDIDE]:
-            print("No handshake yet, skipping MIDI send")
-            return
-            
-        message = bytearray([status_byte, data1, data2, data3])
-        print(f"SPI OUT: [{hex(status_byte)} {data1} {data2} {data3}]")
-        
-        while not self.spi.try_lock():
-            pass
-        try:
-            self.cs.value = False
-            self.spi.write(message)
-        finally:
-            self.cs.value = True
-            self.spi.unlock()
-            time.sleep(0.0001)  # Brief delay between messages
-    
-    def send_note_on(self, note, velocity, key_id):
-        """Send note on message with key_id"""
-        self.send_midi_message(0x90, note, velocity, key_id)
-    
-    def send_note_off(self, note, velocity, key_id):
-        """Send note off message with key_id"""
-        self.send_midi_message(0x80, note, velocity, key_id)
-    
-    def send_control_change(self, cc_number, value):
-        """Send CC message"""
-        self.send_midi_message(0xB0, cc_number, value)
-    
     def cleanup(self):
-        """Clean up resources"""
-        try:
-            self.detect.value = False  # Signal we're shutting down
-            self.spi.deinit()
-        except Exception as e:
-            print(f"SPI cleanup error: {e}")
+        """Clean shutdown"""
+        self.reset_state()
+        time.sleep(0.1)
+        self.spi_bus.deinit()
 
 class Bartleby:
     def __init__(self):
+        print("\nInitializing Bartleby...")
         # System components
         self.hardware = None
         self.midi = None
@@ -232,9 +329,7 @@ class Bartleby:
                     self._send_midi_event(event)
 
     def _send_midi_event(self, event):
-
         print(f"Sending MIDI event: {event}")
-
 
         """Send MIDI event to both USB and SPI"""
         event_type, *params = event
@@ -292,22 +387,22 @@ class Bartleby:
             # Process all hardware
             changes = self.process_hardware()
 
-            # check for cart
+            # Check for cartridge connection
             if not self.spi.is_ready():
-                self.spi.check_for_cartridge()
+                self.spi.check_connection()
 
             # Only process MIDI if we have changes
-            if any(changes.values()):
-                # Generate MIDI events
-                midi_events = self.midi.update(
-                    changes['keys'],
-                    changes['pots'],
-                    {}  # Empty config since we're not using instrument settings
-                )
+            # if any(changes.values()):
+            #     # Generate MIDI events
+            #     midi_events = self.midi.update(
+            #         changes['keys'],
+            #         changes['pots'],
+            #         {}  # Empty config since we're not using instrument settings
+            #     )
                 
-                # Send each MIDI event
-                for event in midi_events:
-                    self._send_midi_event(event)
+            #     # Send each MIDI event
+            #     for event in midi_events:
+            #         self._send_midi_event(event)
             
             return True
             
