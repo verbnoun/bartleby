@@ -67,15 +67,15 @@ class SPIHandler:
             MISO=Constants.SPI_MISO
         )
         
-        # Configure chip select
+        # Configure chip select as DigitalInOut
         self.cs = digitalio.DigitalInOut(Constants.SPI_CS)
         self.cs.direction = digitalio.Direction.OUTPUT
-        self.cs.value = True  # Active LOW, start HIGH
+        self.cs.value = True  # Active low, so initialize high
         
-        # Create SPIDevice instance
+        # Create SPIDevice instance with properly configured chip select
         self.spi_device = SPIDevice(
             self.spi_bus,
-            self.cs,
+            chip_select=self.cs,
             baudrate=1000000,  # 1MHz to match Candide
             polarity=0,
             phase=0
@@ -132,16 +132,13 @@ class SPIHandler:
             return False
 
         try:
-            # Send sync request
+            # Send sync request and read response in a single transaction
             self._out_buffer = bytearray([self.SYNC_REQUEST, self.PROTOCOL_VERSION, 0, 0])
             print(f"[Base] Sending: {list(self._out_buffer)}")
             
             with self.spi_device as spi:
-                # First write sync request
                 spi.write(self._out_buffer)
-                # Wait for Candide to process
-                time.sleep(0.01)
-                # Then read response
+                time.sleep(0.01)  # Wait for Candide to process
                 spi.readinto(self._in_buffer)
                 
             print(f"[Base] Received: {list(self._in_buffer)}")
@@ -160,11 +157,9 @@ class SPIHandler:
     def _start_handshake(self):
         """Begin handshake after successful sync"""
         try:
-            # Wait for HELLO_BART
+            # Wait for HELLO_BART in a single transaction
             with self.spi_device as spi:
-                # Read HELLO_BART
                 spi.readinto(self._in_buffer)
-                time.sleep(0.01)  # Wait for Candide to prepare for response
                 
             if self._in_buffer[0] == self.HELLO_BART:
                 return self._send_hi_candide()
@@ -181,7 +176,6 @@ class SPIHandler:
             self._out_buffer = bytearray([self.HI_CANDIDE, 0, 0, 0])
             
             with self.spi_device as spi:
-                # Send HI_CANDIDE
                 spi.write(self._out_buffer)
                 time.sleep(0.01)  # Give Candide time to process
             
@@ -203,10 +197,8 @@ class SPIHandler:
             self._out_buffer = bytearray([self.SYNC_REQUEST, 0, 0, 0])
             
             with self.spi_device as spi:
-                # Send sync request
                 spi.write(self._out_buffer)
                 time.sleep(0.01)  # Wait for Candide to process
-                # Read response
                 spi.readinto(self._in_buffer)
             
             return self._in_buffer[0] == self.SYNC_ACK
@@ -218,7 +210,6 @@ class SPIHandler:
         """Reset to initial state"""
         self.state = self.DISCONNECTED
         self.sync_attempts = 0
-        self.cs.value = True
         print("[Base] Reset to initial state")
 
     def is_ready(self):
