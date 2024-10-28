@@ -132,17 +132,18 @@ class SPIHandler:
             return False
 
         try:
-            # Send sync request and read response in a single transaction
-            self._out_buffer = bytearray([self.SYNC_REQUEST, self.PROTOCOL_VERSION, 0, 0])
-            print(f"[Base] Sending: {list(self._out_buffer)}")
-            
-            with self.spi_device as spi:
-                spi.write(self._out_buffer)
-                time.sleep(0.01)  # Wait for Candide to process
-                spi.readinto(self._in_buffer)
-                
-            print(f"[Base] Received: {list(self._in_buffer)}")
+            # Prepare sync request
+            self._out_buffer[0] = self.SYNC_REQUEST
+            self._out_buffer[1] = self.PROTOCOL_VERSION
+            self._out_buffer[2] = 0
+            self._out_buffer[3] = 0
 
+            # Single transaction - no sleep between write/read
+            with self.spi_device as spi:
+                spi.write_readinto(self._out_buffer, self._in_buffer)
+                
+            print(f"[Base] Write/Read: sent={list(self._out_buffer)} received={list(self._in_buffer)}")
+            
             if (self._in_buffer[0] == self.SYNC_ACK and
                 self._in_buffer[1] == self.PROTOCOL_VERSION):
                 print("[Base] Sync successful!")
