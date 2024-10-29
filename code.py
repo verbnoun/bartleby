@@ -58,7 +58,7 @@ class SPIHandler:
     
     def __init__(self):
         print("Initializing SPI Handler (Base Station)...")
-        
+
         self.state = self.DISCONNECTED
         self.sync_attempts = 0
         self.last_sync_time = 0
@@ -81,14 +81,47 @@ class SPIHandler:
         self.cs.direction = digitalio.Direction.OUTPUT
         self.cs.value = True  # Active low, so initialize high
         
+
         # Create SPIDevice instance with properly configured chip select
         self.spi_device = SPIDevice(
             self.spi_bus,
             chip_select=self.cs,
-            baudrate=500000,  
+            baudrate=50000,  #50kHz
             polarity=1,
             phase=1
         )
+
+        # SPI test during init
+        print("\n=== Testing SPI Clock ===")
+        test_data = bytearray([0xAA, 0x55, 0xAA, 0x55])
+        print("Starting clock test... Check SCK (GP18) with scope")
+        time.sleep(1)  # Give time to get scope ready
+        try:
+            # First test CS manually
+            print("Testing CS control...")
+            for i in range(4):
+                self.cs.value = False
+                print("CS LOW")
+                time.sleep(3)
+                self.cs.value = True
+                print("CS HIGH")
+                time.sleep(3)
+                
+            # Then test clock with data
+            print("\nTesting Clock - 6 transfers...")
+            for i in range(6):
+                print(f"Transfer {i+1}")
+                self.cs.value = False
+                with self.spi_device as spi:
+                    spi.write(test_data)
+                self.cs.value = True
+                time.sleep(3)
+                
+        except Exception as e:
+            print(f"Test error: {str(e)}")
+            self.cs.value = True  # Ensure CS released
+            
+        print("=== SPI Test Complete ===\n")
         
         # Separate buffers for protocol and MIDI
         self._protocol_out = bytearray(Constants.PROTOCOL_MSG_SIZE)
