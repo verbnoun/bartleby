@@ -31,6 +31,10 @@ class Constants:
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
+    
+    # MIDI message sizes
+    PROTOCOL_MSG_SIZE = 4
+    MIDI_MSG_SIZE = 4
 
 class SPIHandler:
     """Handles SPI communication for base station with proper sync and timing"""
@@ -40,6 +44,10 @@ class SPIHandler:
     HELLO_BART = 0xA0
     HI_CANDIDE = 0xA1
     PROTOCOL_VERSION = 0x01
+
+    # Message types
+    MSG_TYPE_PROTOCOL = 0x00
+    MSG_TYPE_MIDI = 0x01
 
     # States
     DISCONNECTED = 0
@@ -54,6 +62,7 @@ class SPIHandler:
         self.state = self.DISCONNECTED
         self.sync_attempts = 0
         self.last_sync_time = 0
+        self.midi_queue = []
         
         # Configure detect pin as INPUT for cartridge detection
         self.detect = digitalio.DigitalInOut(Constants.CART_DETECT)
@@ -76,15 +85,18 @@ class SPIHandler:
         self.spi_device = SPIDevice(
             self.spi_bus,
             chip_select=self.cs,
-            baudrate=1000000,  # 1MHz to match Candide
-            polarity=0,
-            phase=0
+            baudrate=500000,  
+            polarity=1,
+            phase=1
         )
         
-        self._out_buffer = bytearray(4)
-        self._in_buffer = bytearray(4)
+        # Separate buffers for protocol and MIDI
+        self._protocol_out = bytearray(Constants.PROTOCOL_MSG_SIZE)
+        self._protocol_in = bytearray(Constants.PROTOCOL_MSG_SIZE)
+        self._midi_out = bytearray(Constants.MIDI_MSG_SIZE)
+        self._midi_in = bytearray(Constants.MIDI_MSG_SIZE)
         
-        print("[Base] SPI initialized, waiting for cartridge")
+        print(f"[Base {time.monotonic():.3f}] SPI initialized, waiting for cartridge")
 
     def check_connection(self):
         """Main connection state machine"""
@@ -93,14 +105,14 @@ class SPIHandler:
         # Detect state changes
         cart_present = self.detect.value
         if cart_present and self.state == self.DISCONNECTED:
-            print("\n[Base] Cartridge detected - Starting sync")
+            print(f"\n[Base {current_time:.3f}] Cartridge detected - Starting sync")
             self.state = self.SYNC_STARTED
             self.sync_attempts = 0
             time.sleep(0.01)  # Give cartridge time to initialize
             return self._attempt_sync()
             
         elif not cart_present and self.state != self.DISCONNECTED:
-            print("[Base] Cartridge removed")
+            print(f"[Base {current_time:.3f}] Cartridge removed")
             self.reset_state()
             return False
             
@@ -111,10 +123,12 @@ class SPIHandler:
         elif self.state == self.SYNC_COMPLETE:
             return self._start_handshake()
         elif self.state == self.CONNECTED:
+            self._process_midi_queue()
+            
             # Periodic connection verification
             if (current_time - self.last_sync_time) > 1.0:
                 if not self._verify_connection():
-                    print("[Base] Connection verification failed")
+                    print(f"[Base {current_time:.3f}] Connection verification failed")
                     self.reset_state()
                     return False
                 self.last_sync_time = current_time
@@ -123,69 +137,75 @@ class SPIHandler:
     
     def _attempt_sync(self):
         """Attempt clock/protocol sync with cartridge"""
-        self.last_sync_time = time.monotonic()
+        current_time = time.monotonic()
+        self.last_sync_time = current_time
         self.sync_attempts += 1
 
         if self.sync_attempts > 10:
-            print("[Base] Too many sync attempts - resetting")
+            print(f"[Base {current_time:.3f}] Too many sync attempts - resetting")
             self.reset_state()
             return False
 
         try:
-            # Prepare sync request
-            self._out_buffer[0] = self.SYNC_REQUEST
-            self._out_buffer[1] = self.PROTOCOL_VERSION
-            self._out_buffer[2] = 0
-            self._out_buffer[3] = 0
+            # Prepare sync request - order of bytes fixed
+            self._protocol_out[0] = self.SYNC_REQUEST  # Protocol marker first
+            self._protocol_out[1] = self.PROTOCOL_VERSION
+            self._protocol_out[2] = self.MSG_TYPE_PROTOCOL # Message type moved
+            self._protocol_out[3] = 0
 
-            # Single transaction - no sleep between write/read
+            # Single transaction
             with self.spi_device as spi:
-                spi.write_readinto(self._out_buffer, self._in_buffer)
+                spi.write_readinto(self._protocol_out, self._protocol_in)
                 
-            print(f"[Base] Write/Read: sent={list(self._out_buffer)} received={list(self._in_buffer)}")
+            print(f"[Base {current_time:.3f}] Write/Read: sent={list(self._protocol_out)} received={list(self._protocol_in)}")
             
-            if (self._in_buffer[0] == self.SYNC_ACK and
-                self._in_buffer[1] == self.PROTOCOL_VERSION):
-                print("[Base] Sync successful!")
+            if (self._protocol_in[0] == self.MSG_TYPE_PROTOCOL and
+                self._protocol_in[1] == self.SYNC_ACK and
+                self._protocol_in[2] == self.PROTOCOL_VERSION):
+                print(f"[Base {current_time:.3f}] Sync successful!")
                 self.state = self.SYNC_COMPLETE
                 return True
 
         except Exception as e:
-            print(f"[Base] Sync error: {str(e)}")
+            print(f"[Base {current_time:.3f}] Sync error: {str(e)}")
 
         return False
     
     def _start_handshake(self):
         """Begin handshake after successful sync"""
+        current_time = time.monotonic()
         try:
-            # Wait for HELLO_BART in a single transaction
             with self.spi_device as spi:
-                spi.readinto(self._in_buffer)
+                spi.readinto(self._protocol_in)
                 
-            if self._in_buffer[0] == self.HELLO_BART:
+            if (self._protocol_in[0] == self.MSG_TYPE_PROTOCOL and
+                self._protocol_in[1] == self.HELLO_BART):
                 return self._send_hi_candide()
                     
         except Exception as e:
-            print(f"[Base] Handshake error: {str(e)}")
+            print(f"[Base {current_time:.3f}] Handshake error: {str(e)}")
             self.reset_state()
             
         return False
 
     def _send_hi_candide(self):
         """Complete handshake with HI_CANDIDE response"""
+        current_time = time.monotonic()
         try:
-            self._out_buffer = bytearray([self.HI_CANDIDE, 0, 0, 0])
+            self._protocol_out[0] = self.MSG_TYPE_PROTOCOL
+            self._protocol_out[1] = self.HI_CANDIDE
+            self._protocol_out[2] = 0
+            self._protocol_out[3] = 0
             
             with self.spi_device as spi:
-                spi.write(self._out_buffer)
-                time.sleep(0.01)  # Give Candide time to process
+                spi.write(self._protocol_out)
             
             self.state = self.CONNECTED
-            print("[Base] Connection established!")
+            print(f"[Base {current_time:.3f}] Connection established!")
             return True
                 
         except Exception as e:
-            print(f"[Base] Response error: {str(e)}")
+            print(f"[Base {current_time:.3f}] Response error: {str(e)}")
             self.reset_state()
             return False
 
@@ -195,23 +215,47 @@ class SPIHandler:
             return False
             
         try:
-            self._out_buffer = bytearray([self.SYNC_REQUEST, 0, 0, 0])
+            self._protocol_out[0] = self.MSG_TYPE_PROTOCOL
+            self._protocol_out[1] = self.SYNC_REQUEST
+            self._protocol_out[2] = 0
+            self._protocol_out[3] = 0
             
             with self.spi_device as spi:
-                spi.write(self._out_buffer)
-                time.sleep(0.01)  # Wait for Candide to process
-                spi.readinto(self._in_buffer)
+                spi.write_readinto(self._protocol_out, self._protocol_in)
             
-            return self._in_buffer[0] == self.SYNC_ACK
+            return (self._protocol_in[0] == self.MSG_TYPE_PROTOCOL and 
+                   self._protocol_in[1] == self.SYNC_ACK)
                 
         except Exception:
             return False
+
+    def _process_midi_queue(self):
+        """Process any pending MIDI messages"""
+        if not self.midi_queue:
+            return
+            
+        try:
+            msg = self.midi_queue.pop(0)
+            self._midi_out[0] = self.MSG_TYPE_MIDI
+            self._midi_out[1:] = msg
+            
+            with self.spi_device as spi:
+                spi.write(self._midi_out)
+                
+        except Exception as e:
+            print(f"[Base {time.monotonic():.3f}] MIDI send error: {str(e)}")
+
+    def queue_midi_message(self, msg):
+        """Add MIDI message to transmission queue"""
+        if len(msg) <= 3:  # Ensure message fits in remaining buffer space
+            self.midi_queue.append(msg)
 
     def reset_state(self):
         """Reset to initial state"""
         self.state = self.DISCONNECTED
         self.sync_attempts = 0
-        print("[Base] Reset to initial state")
+        self.midi_queue.clear()
+        print(f"[Base {time.monotonic():.3f}] Reset to initial state")
 
     def is_ready(self):
         """Check if connection is established"""
@@ -304,7 +348,7 @@ class Bartleby:
         )
         print(f"P0: Volume: {0.0:.2f} -> {initial_volume:.2f}")
         
-        if self.spi.is_ready():  # Changed from is_cartridge_present()
+        if self.spi.is_ready():
             print("Cartridge detected!")
             
         print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
@@ -316,24 +360,25 @@ class Bartleby:
                 _, direction = event[1:3]  
                 midi_events = self.midi.handle_octave_shift(direction)
                 print(f"Octave shifted {direction}: new position {self.hardware['encoders'].get_encoder_position(0)}")
-                # Send any MIDI events generated by octave shift
                 for event in midi_events:
                     self._send_midi_event(event)
 
     def _send_midi_event(self, event):
-        print(f"Sending MIDI event: {event}")
-
         """Send MIDI event to both USB and SPI"""
+        print(f"Sending MIDI event: {event}")
         event_type, *params = event
-        if event_type == 'note_on':
-            note, velocity, key_id = params
-            self.spi.send_note_on(note, velocity, key_id)
-        elif event_type == 'note_off':
-            note, velocity, key_id = params
-            self.spi.send_note_off(note, velocity, key_id)
-        elif event_type == 'control_change':
-            cc_num, value, _ = params
-            self.spi.send_control_change(cc_num, value)
+
+        # Send to cartridge via SPI
+        if self.spi.is_ready():
+            if event_type == 'note_on':
+                note, velocity, key_id = params
+                self.spi.queue_midi_message(bytearray([0x90, note, velocity]))
+            elif event_type == 'note_off':
+                note, velocity, key_id = params
+                self.spi.queue_midi_message(bytearray([0x80, note, velocity]))
+            elif event_type == 'control_change':
+                cc_num, value, _ = params
+                self.spi.queue_midi_message(bytearray([0xB0, cc_num,value]))
 
         # Also send to USB MIDI
         self.midi.send_midi_event(event)
@@ -382,19 +427,18 @@ class Bartleby:
             # Check for cartridge connection
             if not self.spi.is_ready():
                 self.spi.check_connection()
-
-            # Only process MIDI if we have changes
-            # if any(changes.values()):
-            #     # Generate MIDI events
-            #     midi_events = self.midi.update(
-            #         changes['keys'],
-            #         changes['pots'],
-            #         {}  # Empty config since we're not using instrument settings
-            #     )
+            
+            # Process MIDI events if hardware has changed and we're connected
+            if any(changes.values()) and self.spi.is_ready():
+                midi_events = self.midi.update(
+                    changes['keys'],
+                    changes['pots'],
+                    {}  # Empty config since we're not using instrument settings
+                )
                 
-            #     # Send each MIDI event
-            #     for event in midi_events:
-            #         self._send_midi_event(event)
+                # Send each MIDI event
+                for event in midi_events:
+                    self._send_midi_event(event)
             
             return True
             
