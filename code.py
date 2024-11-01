@@ -2,6 +2,7 @@ import board
 import busio
 import digitalio
 import time
+import usb_midi
 from hardware import (
     Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
     PotentiometerHandler, Constants as HWConstants
@@ -47,6 +48,16 @@ class HardwareMIDI:
         """Clean shutdown"""
         self.uart.deinit()
 
+class UsbMIDI:
+    """Handles USB MIDI output"""
+    def __init__(self):
+        self.midi = usb_midi.ports[1]
+        print("USB MIDI initialized")
+
+    def send_message(self, message):
+        """Send raw MIDI message bytes"""
+        self.midi.write(bytes(message))
+
 class Bartleby:
     def __init__(self):
         print("\nInitializing Bartleby...")
@@ -54,6 +65,7 @@ class Bartleby:
         self.hardware = None
         self.midi = None
         self.hw_midi = None
+        self.usb_midi = None
         
         # Timing state
         self.current_time = 0
@@ -87,6 +99,7 @@ class Bartleby:
         
         # Initialize hardware MIDI
         self.hw_midi = HardwareMIDI()
+        self.usb_midi = UsbMIDI()
         
         time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
 
@@ -164,7 +177,10 @@ class Bartleby:
         # Send via hardware MIDI
         self.hw_midi.send_message(midi_msg)
         
-        # Also send via USB MIDI
+        # Send via USB MIDI
+        self.usb_midi.send_message(midi_msg)
+        
+        # Also send via USB MIDI through MidiLogic (for compatibility)
         self.midi.send_midi_event(event)
 
     def process_hardware(self):
