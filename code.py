@@ -24,6 +24,9 @@ class Constants:
     MIDI_TX = board.GP16
     UART_RX = board.GP17
 
+    # Detect Pin
+    DETECT_PIN = board.GP22
+
     # Scan Intervals (in seconds)
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
@@ -101,6 +104,8 @@ class Bartleby:
         self.midi = None
         self.uart = None
         self.usb_midi = None
+        self.detect_pin = None
+        self.last_detect_state = True  # Start true since we set pin high
         
         # Timing state
         self.current_time = 0
@@ -115,6 +120,11 @@ class Bartleby:
         
     def _setup_hardware(self):
         """Initialize all hardware components"""
+        # Setup detect pin as output and set high to signal presence
+        self.detect_pin = digitalio.DigitalInOut(Constants.DETECT_PIN)
+        self.detect_pin.direction = digitalio.Direction.OUTPUT
+        self.detect_pin.value = True
+        
         self.hardware = {
             'control_mux': Multiplexer(
                 HWConstants.CONTROL_MUX_SIG,
@@ -226,6 +236,27 @@ class Bartleby:
     def process_hardware(self):
         """Read and process all hardware inputs"""
         self.current_time = time.monotonic()
+        
+        # Check if Candide is still connected
+        detect_state = self.detect_pin.value
+        
+        # Handle new connection
+        if detect_state and not self.last_detect_state:
+            # Send greeting chord
+            greeting_notes = [60, 64, 67]  # C E G chord
+            for note in greeting_notes:
+                self._send_midi_event(('note_on', note, 100, 0))
+                time.sleep(0.5)  # Half second sustain
+                self._send_midi_event(('note_off', note, 0, 0))
+                time.sleep(0.1)  # Brief gap between notes
+            print("Candide connected - sent greeting")
+        
+        # Handle disconnection
+        elif not detect_state and self.last_detect_state:
+            print("Candide unplugged")
+            
+        self.last_detect_state = detect_state
+
         changes = {
             'keys': [],
             'pots': [],
@@ -299,6 +330,8 @@ class Bartleby:
         """Clean shutdown"""
         if self.uart:
             self.uart.cleanup()
+        if self.detect_pin:
+            self.detect_pin.deinit()
         print("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁")
 
 def main():
