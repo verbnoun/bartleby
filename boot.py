@@ -8,8 +8,8 @@ import supervisor
 supervisor.runtime.autoreload = True
 
 # Disable default USB endpoints we won't use
-storage.disable_usb_drive()  # Disable USB drive
-usb_cdc.disable()           # Disable USB serial
+# storage.disable_usb_drive()  # Disable USB drive
+# usb_cdc.disable()           # Disable USB serial
 
 # Configure USB pins for external USB-C port
 board.CUSTOM_USB_DP = board.GP17  # D+
