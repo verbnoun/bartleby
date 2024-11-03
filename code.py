@@ -31,6 +31,9 @@ class Constants:
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
+    
+    # Connection timeout (in seconds)
+    CONNECTION_TIMEOUT = 1.0  # Time without message before considering disconnected
 
 class UartHandler:
     """Handles both MIDI output and text communication over single UART"""
@@ -60,7 +63,7 @@ class UartHandler:
                 print(f"Error sending MIDI: {str(e)}")
 
     def check_for_messages(self):
-        """Check for and process any incoming messages"""
+        """Check for and process any incoming messages. Returns True if message received."""
         try:
             if self.uart.in_waiting:
                 # Read available bytes
@@ -69,13 +72,16 @@ class UartHandler:
                     try:
                         message = new_bytes.decode('utf-8')
                         print(f"Received message: {message}")
+                        return True
                     except Exception as e:
                         # Handle case where received bytes aren't valid UTF-8
                         if str(e):  # Only print if there's an actual error message
                             print(f"Received non-text data: {new_bytes.hex()}")
+            return False
         except Exception as e:
             if str(e):  # Only print if there's an actual error message
                 print(f"Error reading UART: {str(e)}")
+            return False
 
     def cleanup(self):
         """Clean shutdown"""
@@ -106,6 +112,11 @@ class Bartleby:
         self.usb_midi = None
         self.detect_pin = None
         self.last_detect_state = True  # Start true since we set pin high
+        
+        # Connection state
+        self.last_candide_message = 0  # Track last message time
+        self.candide_connected = False  # Track software connection state
+        self.has_greeted = False  # Track if greeting has been played for current connection
         
         # Timing state
         self.current_time = 0
@@ -196,6 +207,18 @@ class Bartleby:
         
         print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
 
+    def _play_greeting(self):
+        """Play welcome melody"""
+        greeting_notes = [60, 64, 67, 72]  # C E G C (ascending)
+        velocities = [80, 85, 90, 95]  # Gradually increasing velocity
+        durations = [0.2, 0.2, 0.2, 0.4]  # Last note slightly longer
+
+        for note, velocity, duration in zip(greeting_notes, velocities, durations):
+            self._send_midi_event(('note_on', note, velocity, 0))
+            time.sleep(duration)  # Hold note
+            self._send_midi_event(('note_off', note, 0, 0))
+            time.sleep(0.05)  # Tiny gap between notes
+
     def _handle_encoder_events(self, encoder_events):
         """Process encoder state changes"""
         for event in encoder_events:
@@ -242,18 +265,13 @@ class Bartleby:
         
         # Handle new connection
         if detect_state and not self.last_detect_state:
-            # Send greeting chord
-            greeting_notes = [60, 64, 67]  # C E G chord
-            for note in greeting_notes:
-                self._send_midi_event(('note_on', note, 100, 0))
-                time.sleep(0.5)  # Half second sustain
-                self._send_midi_event(('note_off', note, 0, 0))
-                time.sleep(0.1)  # Brief gap between notes
-            print("Candide connected - sent greeting")
+            print("Candide physically connected")
         
         # Handle disconnection
         elif not detect_state and self.last_detect_state:
-            print("Candide unplugged")
+            print("Candide physically unplugged")
+            self.candide_connected = False  # Also mark software connection as down
+            self.has_greeted = False  # Reset greeting state
             
         self.last_detect_state = detect_state
 
@@ -295,8 +313,25 @@ class Bartleby:
             # Process all hardware
             changes = self.process_hardware()
             
-            # Check for UART messages
-            self.uart.check_for_messages()
+            # Check for UART messages and update connection state
+            if self.uart.check_for_messages():
+                if not self.candide_connected:
+                    print("Candide software connection established")
+                    self.candide_connected = True
+                    self.has_greeted = False  # Reset greeting flag on new connection
+                
+                if self.candide_connected and not self.has_greeted:
+                    self._play_greeting()
+                    self.has_greeted = True
+                
+                self.last_candide_message = time.monotonic()
+            
+            # Check for connection timeout
+            elif (self.candide_connected and 
+                  time.monotonic() - self.last_candide_message > Constants.CONNECTION_TIMEOUT):
+                print("Candide software connection lost (no messages for 1 second)")
+                self.candide_connected = False
+                self.has_greeted = False  # Reset greeting flag on disconnect
             
             # Process MIDI events if hardware has changed
             if any(changes.values()):
