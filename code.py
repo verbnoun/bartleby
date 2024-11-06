@@ -11,11 +11,7 @@ from midi import MidiLogic
 
 class Constants:
     # System Constants
-    DEBUG = False
-    LOG_GLOBAL = True
-    LOG_HARDWARE = True
-    LOG_MIDI = True
-    LOG_MISC = True
+    DEBUG = True
 
     # Hardware Setup Delay
     SETUP_DELAY = 0.1
@@ -71,7 +67,8 @@ class UartHandler:
                 if new_bytes:  # Only process if we actually got data
                     try:
                         message = new_bytes.decode('utf-8')
-                        print(f"Received message: {message}")
+                        if Constants.DEBUG:
+                            print(f"Received message: {message}")
                         return True
                     except Exception as e:
                         # Handle case where received bytes aren't valid UTF-8
@@ -199,12 +196,6 @@ class Bartleby:
         """Set initial system state"""
         self.hardware['encoders'].reset_all_encoder_positions()
         
-        # Log initial volume pot value
-        initial_volume = self.hardware['pots'].normalize_value(
-            self.hardware['control_mux'].read_channel(0)
-        )
-        print(f"P0: Volume: {0.0:.2f} -> {initial_volume:.2f}")
-        
         print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
 
     def _play_greeting(self):
@@ -231,7 +222,8 @@ class Bartleby:
 
     def _send_midi_event(self, event):
         """Send MIDI event via USB and hardware MIDI"""
-        print(f"Sending MIDI event: {event}")
+        if Constants.DEBUG:
+            print(f"Sending MIDI event: {event}")
         event_type, *params = event
 
         # Convert to MIDI message
@@ -284,16 +276,11 @@ class Bartleby:
         # Always read keys at full speed
         changes['keys'] = self.hardware['keyboard'].read_keys()
         
-        # Read pots at medium interval
+        # Read pots
         if self.current_time - self.last_pot_scan >= Constants.POT_SCAN_INTERVAL:
             changes['pots'] = self.hardware['pots'].read_pots()
             if changes['pots']:
-                # Handle volume pot (pot 0) separately
-                for pot_id, old_value, new_value in changes['pots'][:]:
-                    if pot_id == 0:
-                        print(f"P0: Volume: {old_value:.2f} -> {new_value:.2f}")
-                        changes['pots'].remove((pot_id, old_value, new_value))
-            self.last_pot_scan = self.current_time
+                self.last_pot_scan = self.current_time
         
         # Read encoders at fastest interval
         if self.current_time - self.last_encoder_scan >= Constants.ENCODER_SCAN_INTERVAL:
@@ -329,7 +316,7 @@ class Bartleby:
             # Check for connection timeout
             elif (self.candide_connected and 
                   time.monotonic() - self.last_candide_message > Constants.CONNECTION_TIMEOUT):
-                print("Candide software connection lost (no messages for 1 second)")
+                print("Candide software connection lost, bye Candide")
                 self.candide_connected = False
                 self.has_greeted = False  # Reset greeting flag on disconnect
             
