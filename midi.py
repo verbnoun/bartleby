@@ -6,7 +6,7 @@ class Constants:
     # MPE Configuration
     MPE_MASTER_CHANNEL = 0      # MIDI channel 1 (zero-based)
     MPE_ZONE_START = 1          # MIDI channel 2 (zero-based)
-    MPE_ZONE_END = 14           # MIDI channel 15 (leaving channel 16 free per MPE spec)
+    MPE_ZONE_END = 11           # MIDI channel 15 (leaving channel 16 free per MPE spec)
 
     # MIDI CC Numbers
     CC_LEFT_PRESSURE = 78       # Left sensor pressure
