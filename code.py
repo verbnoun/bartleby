@@ -12,6 +12,7 @@ from midi import MidiLogic
 class Constants:
     # System Constants
     DEBUG = True
+    SEE_HEARTBEAT = False
 
     # Hardware Setup Delay
     SETUP_DELAY = 0.1
@@ -68,7 +69,11 @@ class UartHandler:
                     try:
                         message = new_bytes.decode('utf-8')
                         if Constants.DEBUG:
-                            print(f"Received message: {message}")
+                            if message.strip() == "♡":
+                                if Constants.SEE_HEARTBEAT:
+                                    print(f"Cart {message}")
+                            else:
+                                print(f"Received message: {message}")
                         return True
                     except Exception as e:
                         # Handle case where received bytes aren't valid UTF-8
@@ -222,20 +227,26 @@ class Bartleby:
 
     def _send_midi_event(self, event):
         """Send MIDI event via USB and hardware MIDI"""
-        if Constants.DEBUG:
-            print(f"Sending MIDI event: {event}")
         event_type, *params = event
 
-        # Convert to MIDI message
+        # Convert to MIDI messages
         if event_type == 'note_on':
-            note, velocity, _ = params
+            note, velocity, key_id = params
             midi_msg = [0x90, note, velocity]
         elif event_type == 'note_off':
-            note, velocity, _ = params
+            note, velocity, key_id = params
             midi_msg = [0x80, note, velocity]
         elif event_type == 'control_change':
             cc_num, value, _ = params
             midi_msg = [0xB0, cc_num, value]
+        elif event_type == 'pressure_update':
+            # For MPE, pressure updates are handled by MidiLogic
+            # and converted to appropriate MIDI messages there
+            self.midi.send_midi_event(event)
+            return
+        elif event_type == 'pitch_bend':
+            value_lsb, value_msb, _ = params
+            midi_msg = [0xE0, value_lsb, value_msb]
         else:
             return
 
@@ -245,7 +256,7 @@ class Bartleby:
         # Send via USB MIDI
         self.usb_midi.send_message(midi_msg)
         
-        # Also send via USB MIDI through MidiLogic (for compatibility)
+        # Also send via USB MIDI through MidiLogic for MPE handling
         self.midi.send_midi_event(event)
 
     def process_hardware(self):

@@ -48,9 +48,9 @@ class Constants:
     NUM_KEYS = 25
     NUM_CHANNELS = 50
     ALPHA = 0.05
-    MAX_VK_RESISTANCE = 50000
-    MIN_VK_RESISTANCE = 500
-    ADC_RESISTANCE_SCALE = 5000 # Lower scaling factor to make more sensitive 
+    MAX_VK_RESISTANCE = 100000  # Increase to detect lighter touches
+    MIN_VK_RESISTANCE = 1000    # Increase slightly to provide more range
+    ADC_RESISTANCE_SCALE = 3000 # Lower to make the conversion more sensitive
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
@@ -319,20 +319,24 @@ class KeyboardHandler:
         return changed_keys
         
     def _process_key_reading(self, key_index, left_value, right_value, current_active_keys, changed_keys):
+        # Get raw resistance values
         left_resistance = self.adc_to_resistance(left_value)
         right_resistance = self.adc_to_resistance(right_value)
         
+        # Get normalized values
         left_normalized = self.normalize_resistance(left_resistance)
         right_normalized = self.normalize_resistance(right_resistance)
         
-        if left_normalized > 0.1 or right_normalized > 0.1:
-
-            # print(f"Key {key_index}: L={left_value} R={right_value}")
+        if left_normalized > 0.05 or right_normalized > 0.05:  # Using current threshold
+            # Debug output
+            print(f"\nKey {key_index:02d}")
+            print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
+            print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
             
             current_active_keys.append(key_index)
-            
+                
         self.key_hardware_data[key_index] = (left_normalized, right_normalized)
-        
+            
         if (left_normalized, right_normalized) != self.key_states[key_index]:
             self.key_states[key_index] = (left_normalized, right_normalized)
             changed_keys.append((key_index, left_normalized, right_normalized))
