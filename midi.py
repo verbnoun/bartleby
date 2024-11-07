@@ -3,12 +3,25 @@ import usb_midi
 from collections import deque
 
 class Constants:
+    # System Constants
+    DEBUG = True
+    
     # MPE Configuration
     MPE_MASTER_CHANNEL = 0      # MIDI channel 1 (zero-based)
     MPE_ZONE_START = 1          # MIDI channel 2 (zero-based)
     MPE_ZONE_END = 11           # MIDI channel 15 (leaving channel 16 free per MPE spec)
 
-    # MIDI CC Numbers
+    # MIDI CC Numbers - Standard Controls
+    CC_MODULATION = 1
+    CC_VOLUME = 7
+    CC_FILTER_RESONANCE = 71
+    CC_RELEASE_TIME = 72
+    CC_ATTACK_TIME = 73
+    CC_FILTER_CUTOFF = 74
+    CC_DECAY_TIME = 75
+    CC_SUSTAIN_LEVEL = 76
+
+    # MIDI CC Numbers - MPE Specific
     CC_LEFT_PRESSURE = 78       # Left sensor pressure
     CC_RIGHT_PRESSURE = 79      # Right sensor pressure
     CC_CHANNEL_PRESSURE = 74    # Standard MPE channel pressure
@@ -26,9 +39,67 @@ class Constants:
     
     # MPE Settings
     MPE_PITCH_BEND_RANGE = 48   # Default to 48 semitones for MPE
-    
-    # Debug
-    DEBUG = True
+
+    # Default CC Assignments for Pots
+    DEFAULT_CC_ASSIGNMENTS = {
+        0: CC_FILTER_CUTOFF,     # Pot 0: Filter Cutoff
+        1: CC_FILTER_RESONANCE,  # Pot 1: Filter Resonance
+        2: CC_ATTACK_TIME,       # Pot 2: Attack
+        3: CC_DECAY_TIME,        # Pot 3: Decay
+        4: CC_SUSTAIN_LEVEL,     # Pot 4: Sustain
+        5: CC_RELEASE_TIME,      # Pot 5: Release
+        6: CC_VOLUME,            # Pot 6: Volume
+        7: CC_MODULATION,        # Pot 7: Modulation
+        8: 20,                   # Pot 8: Unassigned (CC20)
+        9: 21,                   # Pot 9: Unassigned (CC21)
+        10: 22,                  # Pot 10: Unassigned (CC22)
+        11: 23,                  # Pot 11: Unassigned (CC23)
+        12: 24,                  # Pot 12: Unassigned (CC24)
+        13: 25,                  # Pot 13: Unassigned (CC25)
+    }
+
+class CCConfigManager:
+    """Manages CC assignments and configuration for pots"""
+    def __init__(self):
+        self.cc_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
+
+    def reset_to_defaults(self):
+        """Reset all CC assignments to default values"""
+        self.cc_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
+        if Constants.DEBUG:
+            print("CC assignments reset to defaults")
+
+    def get_cc_for_pot(self, pot_number):
+        """Get the CC number assigned to a pot"""
+        return self.cc_assignments.get(pot_number, pot_number)  # Fallback to pot number if not mapped
+
+    def parse_config_message(self, message):
+        """Parse configuration message from Candide
+        Format: cc:0=74,1=71,2=73
+        Returns True if successful, False if invalid format
+        """
+        try:
+            if not message.startswith("cc:"):
+                return False
+
+            assignments = message[3:].split(',')
+            for assignment in assignments:
+                if '=' not in assignment:
+                    continue
+                pot, cc = assignment.split('=')
+                pot_num = int(pot)
+                cc_num = int(cc)
+                if 0 <= pot_num <= 13 and 0 <= cc_num <= 127:
+                    self.cc_assignments[pot_num] = cc_num
+                    if Constants.DEBUG:
+                        print(f"Assigned Pot {pot_num} to CC {cc_num}")
+
+            return True
+
+        except Exception as e:
+            if Constants.DEBUG:
+                print(f"Error parsing CC config: {str(e)}")
+            return False
 
 class NoteState:
     """Memory-efficient note state tracking for CircuitPython"""
@@ -154,16 +225,26 @@ class MPENoteProcessor:
         return midi_events
 
 class MidiControlProcessor:
-    """Handles MIDI control change processing"""
+    """Handles MIDI control change processing with configurable CC assignments"""
     def __init__(self):
-        pass
+        self.cc_config = CCConfigManager()
 
     def process_pot_changes(self, changed_pots):
+        """Process pot changes and generate MIDI events"""
         midi_events = []
         for pot_index, old_value, new_value in changed_pots:
+            cc_number = self.cc_config.get_cc_for_pot(pot_index)
             midi_value = int(new_value * 127)
-            midi_events.append(('control_change', pot_index, midi_value, new_value))
+            midi_events.append(('control_change', cc_number, midi_value, new_value))
         return midi_events
+
+    def handle_config_message(self, message):
+        """Process configuration message from Candide"""
+        return self.cc_config.parse_config_message(message)
+
+    def reset_to_defaults(self):
+        """Reset CC assignments to defaults"""
+        self.cc_config.reset_to_defaults()
 
 class MidiLogic:
     def __init__(self):
@@ -190,11 +271,19 @@ class MidiLogic:
         self._send_message(0xB0, 6, Constants.MPE_PITCH_BEND_RANGE)  # Set pitch bend range
         self._send_message(0xB0, 38, 0)   # LSB (always 0 for pitch bend range)
 
+    def handle_config_message(self, message):
+        """Handle configuration message from Candide"""
+        return self.control_processor.handle_config_message(message)
+
+    def reset_cc_defaults(self):
+        """Reset CC assignments to defaults"""
+        self.control_processor.reset_to_defaults()
+
     def process_pot_changes(self, changed_pots, _):
         return self.control_processor.process_pot_changes(changed_pots)
 
     def process_key_changes(self, changed_keys, config):
-        return self.note_processor.process_key_changes(changed_keys, config)  # Removed second argument
+        return self.note_processor.process_key_changes(changed_keys, config)
 
     def handle_octave_shift(self, direction):
         return self.note_processor.handle_octave_shift(direction)

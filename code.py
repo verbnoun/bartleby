@@ -34,7 +34,7 @@ class Constants:
 
 class UartHandler:
     """Handles both MIDI output and text communication over single UART"""
-    def __init__(self):
+    def __init__(self, midi_callback=None):
         print(f"Initializing UART on TX={Constants.MIDI_TX}, RX={Constants.UART_RX}")
         try:
             # Initialize single UART for both MIDI and text at MIDI baud rate
@@ -46,6 +46,7 @@ class UartHandler:
                                 stop=1,
                                 timeout=0.001)  # Small timeout for non-blocking reads
             self.buffer = bytearray()
+            self.midi_callback = midi_callback
             print("UART initialization successful")
         except Exception as e:
             print(f"UART initialization error: {str(e)}")
@@ -68,7 +69,12 @@ class UartHandler:
                 if new_bytes:  # Only process if we actually got data
                     try:
                         message = new_bytes.decode('utf-8')
-                        if Constants.DEBUG:
+                        if message.startswith("cc:"):  # Configuration message
+                            if self.midi_callback:
+                                self.midi_callback(message)
+                            if Constants.DEBUG:
+                                print(f"Received config: {message}")
+                        elif Constants.DEBUG:
                             if message.strip() == "♡":
                                 if Constants.SEE_HEARTBEAT:
                                     print(f"Cart {message}")
@@ -161,6 +167,11 @@ class Bartleby:
         
         time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
 
+    def _handle_midi_config(self, message):
+        """Handle MIDI configuration messages from Candide"""
+        if self.midi:
+            self.midi.handle_config_message(message)
+
     def _setup_keyboard(self):
         """Initialize keyboard multiplexers and handler"""
         keyboard_l1a = Multiplexer(
@@ -195,13 +206,20 @@ class Bartleby:
     def _setup_uart(self):
         """Initialize UART for both MIDI and communication"""
         print("Setting up UART...")
-        self.uart = UartHandler()
+        self.uart = UartHandler(midi_callback=self._handle_midi_config)
 
     def _setup_initial_state(self):
         """Set initial system state"""
         self.hardware['encoders'].reset_all_encoder_positions()
-        
         print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
+
+    def _handle_candide_disconnect(self):
+        """Handle Candide disconnection"""
+        print("Candide software connection lost")
+        self.candide_connected = False
+        self.has_greeted = False
+        if self.midi:
+            self.midi.reset_cc_defaults()
 
     def _play_greeting(self):
         """Play welcome melody"""
@@ -327,9 +345,7 @@ class Bartleby:
             # Check for connection timeout
             elif (self.candide_connected and 
                   time.monotonic() - self.last_candide_message > Constants.CONNECTION_TIMEOUT):
-                print("Candide software connection lost, bye Candide")
-                self.candide_connected = False
-                self.has_greeted = False  # Reset greeting flag on disconnect
+                self._handle_candide_disconnect()
             
             # Process MIDI events if hardware has changed
             if any(changes.values()):
