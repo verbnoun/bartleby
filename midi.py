@@ -219,9 +219,13 @@ class MidiLogic:
         if event_type == 'note_on':
             midi_note, velocity, key_id = params
             channel = self.channel_manager.allocate_channel(key_id)
-            self.channel_manager.add_note(key_id, midi_note, channel, velocity)
+            note_state = self.channel_manager.add_note(key_id, midi_note, channel, velocity)
             if Constants.DEBUG:
-                print(f"Note ON - channel: {channel}, note: {midi_note}, velocity: {velocity}")
+                print(f"\nKey {key_id} MIDI Events:")
+                print(f"  Note ON:")
+                print(f"    Channel: {channel + 1}")  # Display 1-based channel
+                print(f"    Note: {midi_note}")
+                print(f"    Velocity: {velocity}")
             self._send_message(0x90 | channel, int(midi_note), velocity)
                 
         elif event_type == 'note_off':
@@ -229,7 +233,10 @@ class MidiLogic:
             note_state = self.channel_manager.get_note_state(key_id)
             if note_state:
                 if Constants.DEBUG:
-                    print(f"Note OFF - channel: {note_state.channel}, note: {midi_note}")
+                    print(f"\nKey {key_id} MIDI Events:")
+                    print(f"  Note OFF:")
+                    print(f"    Channel: {note_state.channel + 1}")  # Display 1-based channel
+                    print(f"    Note: {midi_note}")
                 self._send_message(0x80 | note_state.channel, int(midi_note), velocity)
                 self.channel_manager.release_note(key_id)
                     
@@ -241,26 +248,38 @@ class MidiLogic:
                 avg_pressure = (left + right) / 2
                 channel_pressure = int(avg_pressure * 127)
                 
+                # Calculate pitch bend
+                bend_value = self._calculate_pitch_bend(left, right)
+                lsb = bend_value & 0x7F
+                msb = (bend_value >> 7) & 0x7F
+                normalized_bend = (bend_value - Constants.PITCH_BEND_CENTER) / Constants.PITCH_BEND_CENTER
+                
                 if Constants.DEBUG:
-                    print(f"CH{note_state.channel:02d} pressure - hw: {avg_pressure:.3f}, midi: {channel_pressure}")
+                    print(f"\nKey {key_id} MIDI Events:")
+                    print(f"  Hardware Values:")
+                    print(f"    Left Pressure: {left:.3f}")
+                    print(f"    Right Pressure: {right:.3f}")
+                    print(f"  MIDI Updates:")
+                    print(f"    Channel: {note_state.channel + 1}")  # Display 1-based channel
+                    print(f"    Pressure: {channel_pressure}")
+                    print(f"    Pitch Bend: {normalized_bend:+.3f}")
                 
                 # Send MPE channel pressure
                 self._send_message(0xB0 | note_state.channel, Constants.CC_CHANNEL_PRESSURE, channel_pressure)
                 
-                # Still calculate and send pitch bend but without debug output
-                bend_value = self._calculate_pitch_bend(left, right)
-                lsb = bend_value & 0x7F
-                msb = (bend_value >> 7) & 0x7F
+                # Send pitch bend
                 self._send_message(0xE0 | note_state.channel, lsb, msb)
                 
-                # Store pressure values but don't send individual L/R CCs for now
+                # Store pressure values
                 note_state.left_pressure = left
                 note_state.right_pressure = right
                     
         elif event_type == 'control_change':
             cc_number, midi_value, _ = params
             if Constants.DEBUG:
-                print(f"CC - number: {cc_number}, value: {midi_value}")
+                print(f"\nControl Change:")
+                print(f"  CC Number: {cc_number}")
+                print(f"  Value: {midi_value}")
             self._send_message(0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value)
 
     def _calculate_pitch_bend(self, left, right):
