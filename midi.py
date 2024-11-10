@@ -100,9 +100,9 @@ class CCConfigManager:
             return False
 
 class NoteState:
-    """Memory-efficient note state tracking for CircuitPython"""
+    """Memory-efficient note state tracking for CircuitPython with active state tracking"""
     __slots__ = ['key_id', 'midi_note', 'channel', 'velocity', 'timestamp', 
-                 'left_pressure', 'right_pressure', 'pitch_bend']
+                 'left_pressure', 'right_pressure', 'pitch_bend', 'active']
     
     def __init__(self, key_id, midi_note, channel, velocity):
         self.key_id = key_id
@@ -113,18 +113,19 @@ class NoteState:
         self.left_pressure = 0
         self.right_pressure = 0
         self.pitch_bend = Constants.PITCH_BEND_CENTER
+        self.active = True  # Track if note is still active for MPE control
 
 class MPEChannelManager:
     def __init__(self):
         self.active_notes = {}
-        self.note_queue = deque((), Constants.MAX_ACTIVE_NOTES)  # Use positional args instead
+        self.note_queue = deque((), Constants.MAX_ACTIVE_NOTES)
         self.available_channels = list(range(
             Constants.MPE_ZONE_START, 
             Constants.MPE_ZONE_END + 1
         ))
 
     def allocate_channel(self, key_id):
-        if key_id in self.active_notes:
+        if key_id in self.active_notes and self.active_notes[key_id].active:
             return self.active_notes[key_id].channel
 
         if self.available_channels:
@@ -132,7 +133,7 @@ class MPEChannelManager:
             
         # Steal channel from oldest note if queue not empty
         if len(self.note_queue):
-            oldest_key_id = self.note_queue.popleft()  # Use popleft for FIFO behavior
+            oldest_key_id = self.note_queue.popleft()
             channel = self.active_notes[oldest_key_id].channel
             self._release_note(oldest_key_id)
             return channel
@@ -142,25 +143,26 @@ class MPEChannelManager:
     def add_note(self, key_id, midi_note, channel, velocity):
         note_state = NoteState(key_id, midi_note, channel, velocity)
         self.active_notes[key_id] = note_state
-        self.note_queue.append(key_id)  # Queue will automatically maintain its size
+        self.note_queue.append(key_id)
         return note_state
 
     def _release_note(self, key_id):
         if key_id in self.active_notes:
             note_state = self.active_notes[key_id]
+            note_state.active = False  # Mark as inactive instead of deleting
             channel = note_state.channel
             if channel not in self.available_channels:
                 self.available_channels.append(channel)
-            del self.active_notes[key_id]
 
     def release_note(self, key_id):
         self._release_note(key_id)
 
     def get_note_state(self, key_id):
-        return self.active_notes.get(key_id)
+        note_state = self.active_notes.get(key_id)
+        return note_state if note_state and note_state.active else None
 
     def get_active_notes(self):
-        return list(self.active_notes.values())
+        return [note for note in self.active_notes.values() if note.active]
 
 class MPENoteProcessor:
     """Memory-efficient MPE note processing for CircuitPython"""
@@ -175,26 +177,32 @@ class MPENoteProcessor:
         
         for key_id, left, right in changed_keys:
             avg_pressure = (left + right) / 2
+            note_state = self.channel_manager.get_note_state(key_id)
             
             if avg_pressure > 0.01:  # Key is active
-                note_state = self.channel_manager.get_note_state(key_id)
                 midi_note = self.base_root_note + self.octave_shift * 12 + key_id
                 
                 if not note_state:  # New note
                     velocity = int(avg_pressure * 127)
-                    midi_events.append(('note_on', midi_note, velocity, key_id))
+                    midi_events.extend([
+                        ('pitch_bend_init', key_id, left, right),
+                        ('pressure_init', key_id, avg_pressure),
+                        ('note_on', midi_note, velocity, key_id)
+                    ])
                     self.active_notes.add(key_id)
                 
-                # Always send pressure updates for active notes
-                midi_events.append(('pressure_update', key_id, left, right))
+                elif note_state.active:  # Only send updates for active notes
+                    midi_events.append(('pressure_update', key_id, left, right))
                 
             else:  # Key released
-                if key_id in self.active_notes:
-                    note_state = self.channel_manager.get_note_state(key_id)
-                    if note_state:
-                        midi_note = note_state.midi_note
-                        midi_events.append(('note_off', midi_note, 0, key_id))
-                        self.active_notes.remove(key_id)
+                if key_id in self.active_notes and note_state and note_state.active:
+                    midi_note = note_state.midi_note
+                    # Send a final pressure of 0 before note off
+                    midi_events.extend([
+                        ('pressure_update', key_id, 0, 0),
+                        ('note_off', midi_note, 0, key_id)
+                    ])
+                    self.active_notes.remove(key_id)
 
         return midi_events
 
@@ -209,10 +217,17 @@ class MPENoteProcessor:
                 old_note = note_state.midi_note
                 new_note = self.base_root_note + self.octave_shift * 12 + note_state.key_id
                 
-                midi_events.append(('note_off', old_note, 0, note_state.key_id))
-                midi_events.append(('note_on', new_note, note_state.velocity, note_state.key_id))
+                midi_events.extend([
+                    ('pitch_bend_init', note_state.key_id, 
+                     note_state.left_pressure, note_state.right_pressure),
+                    ('pressure_init', note_state.key_id, 
+                     (note_state.left_pressure + note_state.right_pressure) / 2),
+                    ('note_off', old_note, 0, note_state.key_id),
+                    ('note_on', new_note, note_state.velocity, note_state.key_id)
+                ])
                 
-                if note_state.left_pressure > 0 or note_state.right_pressure > 0:
+                if note_state.active and (note_state.left_pressure > 0 or 
+                                        note_state.right_pressure > 0):
                     midi_events.append((
                         'pressure_update',
                         note_state.key_id,
@@ -289,27 +304,60 @@ class MidiLogic:
     def update(self, changed_keys, changed_pots, config):
         midi_events = []
         if changed_keys:
-            midi_events.extend(self.process_key_changes(changed_keys, config))
+            key_events = self.process_key_changes(changed_keys, config)
+            # Sort key events to ensure proper MPE order
+            init_events = []
+            note_events = []
+            update_events = []
+            
+            for event in key_events:
+                if event[0] in ('pitch_bend_init', 'pressure_init'):
+                    init_events.append(event)
+                elif event[0] in ('note_on', 'note_off'):
+                    note_events.append(event)
+                else:
+                    update_events.append(event)
+            
+            midi_events.extend(init_events)
+            midi_events.extend(note_events)
+            midi_events.extend(update_events)
+            
         if changed_pots:
             midi_events.extend(self.process_pot_changes(changed_pots, None))
+            
+        for event in midi_events:
+            self.send_midi_event(event)
+            
         return midi_events
-
-    def _send_message(self, status, data1, data2=0):
-        """Send raw MIDI message"""
-        self.midi_out.write(bytes([status, data1, data2]))
-
-    def _calculate_pitch_bend(self, left, right):
-        """Calculate pitch bend value from left/right pressure differential"""
-        diff = right - left  # Range: -1 to 1
-        normalized = (diff + 1) / 2  # Range: 0 to 1
-        return int(normalized * Constants.PITCH_BEND_MAX)
 
     def send_midi_event(self, event):
         """Send MIDI event via USB and UART"""
         event_type = event[0]
         params = event[1:]
         
-        if event_type == 'note_on':
+        if event_type == 'pitch_bend_init':
+            key_id, left, right = params
+            channel = self.channel_manager.allocate_channel(key_id)
+            bend_value = self._calculate_pitch_bend(left, right)
+            lsb = bend_value & 0x7F
+            msb = (bend_value >> 7) & 0x7F
+            if Constants.DEBUG:
+                print(f"\nKey {key_id} Initial Pitch Bend:")
+                print(f"  Channel: {channel + 1}")
+                print(f"  Bend Value: {bend_value}")
+            self._send_message(0xE0 | channel, lsb, msb)
+            
+        elif event_type == 'pressure_init':
+            key_id, pressure = params
+            channel = self.channel_manager.allocate_channel(key_id)
+            pressure_value = int(pressure * 127)
+            if Constants.DEBUG:
+                print(f"\nKey {key_id} Initial Pressure:")
+                print(f"  Channel: {channel + 1}")
+                print(f"  Pressure: {pressure_value}")
+            self._send_message(0xD0 | channel, pressure_value, 0)
+                
+        elif event_type == 'note_on':
             midi_note, velocity, key_id = params
             channel = self.channel_manager.allocate_channel(key_id)
             note_state = self.channel_manager.add_note(key_id, midi_note, channel, velocity)
@@ -375,6 +423,16 @@ class MidiLogic:
                 print(f"  Value: {midi_value}")
             # Send CC messages on master channel
             self._send_message(0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value)
+
+    def _calculate_pitch_bend(self, left, right):
+        """Calculate pitch bend value from left/right pressure differential"""
+        diff = right - left  # Range: -1 to 1
+        normalized = (diff + 1) / 2  # Range: 0 to 1
+        return int(normalized * Constants.PITCH_BEND_MAX)
+
+    def _send_message(self, status, data1, data2=0):
+        """Send raw MIDI message"""
+        self.midi_out.write(bytes([status, data1, data2]))
 
     def handle_pressure(self, key_id, left_pressure, right_pressure):
         """Helper method for direct pressure handling"""
