@@ -3,7 +3,6 @@ import usb_midi
 from collections import deque
 
 class Constants:
-    # System Constants
     DEBUG = True
     
     # MPE Configuration
@@ -97,8 +96,7 @@ class CCConfigManager:
             return True
 
         except Exception as e:
-            if Constants.DEBUG:
-                print(f"Error parsing CC config: {str(e)}")
+            print(f"Error parsing CC config: {str(e)}")
             return False
 
 class NoteState:
@@ -296,12 +294,18 @@ class MidiLogic:
             midi_events.extend(self.process_pot_changes(changed_pots, None))
         return midi_events
 
-    def _send_message(self, status, data1, data2):
+    def _send_message(self, status, data1, data2=0):
         """Send raw MIDI message"""
         self.midi_out.write(bytes([status, data1, data2]))
 
+    def _calculate_pitch_bend(self, left, right):
+        """Calculate pitch bend value from left/right pressure differential"""
+        diff = right - left  # Range: -1 to 1
+        normalized = (diff + 1) / 2  # Range: 0 to 1
+        return int(normalized * Constants.PITCH_BEND_MAX)
+
     def send_midi_event(self, event):
-        """Send MIDI event via USB"""
+        """Send MIDI event via USB and UART"""
         event_type = event[0]
         params = event[1:]
         
@@ -312,7 +316,7 @@ class MidiLogic:
             if Constants.DEBUG:
                 print(f"\nKey {key_id} MIDI Events:")
                 print(f"  Note ON:")
-                print(f"    Channel: {channel + 1}")  # Display 1-based channel
+                print(f"    Channel: {channel + 1}")
                 print(f"    Note: {midi_note}")
                 print(f"    Velocity: {velocity}")
             self._send_message(0x90 | channel, int(midi_note), velocity)
@@ -324,7 +328,7 @@ class MidiLogic:
                 if Constants.DEBUG:
                     print(f"\nKey {key_id} MIDI Events:")
                     print(f"  Note OFF:")
-                    print(f"    Channel: {note_state.channel + 1}")  # Display 1-based channel
+                    print(f"    Channel: {note_state.channel + 1}")
                     print(f"    Note: {midi_note}")
                 self._send_message(0x80 | note_state.channel, int(midi_note), velocity)
                 self.channel_manager.release_note(key_id)
@@ -333,11 +337,11 @@ class MidiLogic:
             key_id, left, right = params
             note_state = self.channel_manager.get_note_state(key_id)
             if note_state:
-                # Calculate and store average pressure
+                # Calculate average pressure for Z-axis (pressure)
                 avg_pressure = (left + right) / 2
-                channel_pressure = int(avg_pressure * 127)
+                pressure_value = int(avg_pressure * 127)
                 
-                # Calculate pitch bend
+                # Calculate X-axis (timbre) from L/R differential
                 bend_value = self._calculate_pitch_bend(left, right)
                 lsb = bend_value & 0x7F
                 msb = (bend_value >> 7) & 0x7F
@@ -349,14 +353,14 @@ class MidiLogic:
                     print(f"    Left Pressure: {left:.3f}")
                     print(f"    Right Pressure: {right:.3f}")
                     print(f"  MIDI Updates:")
-                    print(f"    Channel: {note_state.channel + 1}")  # Display 1-based channel
-                    print(f"    Pressure: {channel_pressure}")
+                    print(f"    Channel: {note_state.channel + 1}")
+                    print(f"    Pressure: {pressure_value}")
                     print(f"    Pitch Bend: {normalized_bend:+.3f}")
                 
-                # Send MPE channel pressure
-                self._send_message(0xB0 | note_state.channel, Constants.CC_CHANNEL_PRESSURE, channel_pressure)
+                # Send MPE Channel Pressure (Z-axis)
+                self._send_message(0xD0 | note_state.channel, pressure_value, 0)
                 
-                # Send pitch bend
+                # Send MPE Pitch Bend (X-axis)
                 self._send_message(0xE0 | note_state.channel, lsb, msb)
                 
                 # Store pressure values
@@ -369,10 +373,9 @@ class MidiLogic:
                 print(f"\nControl Change:")
                 print(f"  CC Number: {cc_number}")
                 print(f"  Value: {midi_value}")
+            # Send CC messages on master channel
             self._send_message(0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value)
 
-    def _calculate_pitch_bend(self, left, right):
-        """Calculate pitch bend value from left/right pressure differential"""
-        diff = right - left  # Range: -1 to 1
-        normalized = (diff + 1) / 2  # Range: 0 to 1
-        return int(normalized * Constants.PITCH_BEND_MAX)
+    def handle_pressure(self, key_id, left_pressure, right_pressure):
+        """Helper method for direct pressure handling"""
+        self.send_midi_event(('pressure_update', key_id, left_pressure, right_pressure))

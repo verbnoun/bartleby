@@ -10,7 +10,6 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    # System Constants
     DEBUG = True
     SEE_HEARTBEAT = False
 
@@ -79,7 +78,8 @@ class UartHandler:
                                 if Constants.SEE_HEARTBEAT:
                                     print(f"Cart {message}")
                             else:
-                                print(f"Received message: {message}")
+                                if Constants.DEBUG:
+                                    print(f"Received message: {message}")
                         return True
                     except Exception as e:
                         # Handle case where received bytes aren't valid UTF-8
@@ -112,7 +112,7 @@ class UsbMIDI:
 
 class Bartleby:
     def __init__(self):
-        print("\nInitializing Bartleby...")
+        print("\nWake Up Bartleby!")
         # System components
         self.hardware = None
         self.midi = None
@@ -239,7 +239,8 @@ class Bartleby:
             if event[0] == 'rotation':
                 _, direction = event[1:3]  
                 midi_events = self.midi.handle_octave_shift(direction)
-                print(f"Octave shifted {direction}: new position {self.hardware['encoders'].get_encoder_position(0)}")
+                if Constants.DEBUG:
+                    print(f"Octave shifted {direction}: new position {self.hardware['encoders'].get_encoder_position(0)}")
                 for event in midi_events:
                     self._send_midi_event(event)
 

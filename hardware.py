@@ -6,6 +6,7 @@ import rotaryio
 import analogio
 
 class Constants:
+    DEBUG = True
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1
@@ -203,8 +204,9 @@ class RotaryEncoderHandler:
             if new_pos != self.encoder_positions[encoder_num]:
                 self.encoder_positions[encoder_num] = new_pos
                 events.append(('rotation', encoder_num, direction, new_pos))
-
-                # print(f"E{encoder_num}: Position: {self.encoder_positions[encoder_num]} -> {new_pos}")
+                
+                if Constants.DEBUG:
+                    print(f"E{encoder_num}: Position: {self.encoder_positions[encoder_num]} -> {new_pos}")
         
         # Save the current position for the next read
         self.last_positions[encoder_num] = current_position
@@ -441,9 +443,10 @@ class KeyboardHandler:
             current_active_keys.append(key_index)
             
             # Debug output (kept from original)
-            print(f"\nKey {key_index:02d}")
-            print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
-            print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
+            if Constants.DEBUG:
+                print(f"\nKey {key_index:02d}")
+                print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
+                print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
         
         # Record changes
         if (left_normalized != key_state.left_value or 
