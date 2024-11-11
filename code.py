@@ -133,18 +133,6 @@ class Bartleby:
         if self.midi:
             self.midi.reset_cc_defaults()
 
-    # def _play_greeting(self):
-    #     """Play welcome melody"""
-    #     greeting_notes = [60, 64, 67, 72]  # C E G C (ascending)
-    #     velocities = [80, 85, 90, 95]  # Gradually increasing velocity
-    #     durations = [0.2, 0.2, 0.2, 0.4]  # Last note slightly longer
-
-    #     for note, velocity, duration in zip(greeting_notes, velocities, durations):
-    #         self.midi.send_note_on(note, velocity, 0)
-    #         time.sleep(duration)  # Hold note
-    #         self.midi.send_note_off(note, 0, 0)
-    #         time.sleep(0.05)  # Tiny gap between notes
-
     def _handle_encoder_events(self, encoder_events):
         """Process encoder state changes"""
         for event in encoder_events:
@@ -206,19 +194,6 @@ class Bartleby:
         try:
             # Process all hardware
             changes = self.process_hardware()
-            
-            # Check for MIDI messages and update connection state
-            # if self.midi.check_for_messages():
-            #     if not self.candide_connected:
-            #         print("Candide software connection established")
-            #         self.candide_connected = True
-            #         self.has_greeted = False  # Reset greeting flag on new connection
-                
-            #     if self.candide_connected and not self.has_greeted:
-            #         self._play_greeting()
-            #         self.has_greeted = True
-                
-            #     self.last_candide_message = time.monotonic()
             
             if self.midi.check_for_messages():
                 if not self.candide_connected:
