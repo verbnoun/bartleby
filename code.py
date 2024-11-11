@@ -1,8 +1,6 @@
 import board
-import busio
 import digitalio
 import time
-import usb_midi
 from hardware import (
     Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
     PotentiometerHandler, Constants as HWConstants
@@ -16,9 +14,9 @@ class Constants:
     # Hardware Setup Delay
     SETUP_DELAY = 0.1
 
-    # UART Pins
+    # MIDI Pins
     MIDI_TX = board.GP16
-    UART_RX = board.GP17
+    MIDI_RX = board.GP17
 
     # Detect Pin
     DETECT_PIN = board.GP22
@@ -31,93 +29,12 @@ class Constants:
     # Connection timeout (in seconds)
     CONNECTION_TIMEOUT = 1.0  # Time without message before considering disconnected
 
-class UartHandler:
-    """Handles both MIDI output and text communication over single UART"""
-    def __init__(self, midi_callback=None):
-        print(f"Initializing UART on TX={Constants.MIDI_TX}, RX={Constants.UART_RX}")
-        try:
-            # Initialize single UART for both MIDI and text at MIDI baud rate
-            self.uart = busio.UART(tx=Constants.MIDI_TX,
-                                rx=Constants.UART_RX,
-                                baudrate=31250,  # MIDI baud rate for both
-                                bits=8,
-                                parity=None,
-                                stop=1,
-                                timeout=0.001)  # Small timeout for non-blocking reads
-            self.buffer = bytearray()
-            self.midi_callback = midi_callback
-            print("UART initialization successful")
-        except Exception as e:
-            print(f"UART initialization error: {str(e)}")
-            raise
-
-    def send_midi(self, message):
-        """Send raw MIDI message bytes"""
-        try:
-            self.uart.write(bytes(message))
-        except Exception as e:
-            if str(e):  # Only print if there's an actual error message
-                print(f"Error sending MIDI: {str(e)}")
-
-    def check_for_messages(self):
-        """Check for and process any incoming messages. Returns True if message received."""
-        try:
-            if self.uart.in_waiting:
-                # Read available bytes
-                new_bytes = self.uart.read(self.uart.in_waiting)
-                if new_bytes:  # Only process if we actually got data
-                    try:
-                        message = new_bytes.decode('utf-8')
-                        if message.startswith("cc:"):  # Configuration message
-                            if self.midi_callback:
-                                self.midi_callback(message)
-                            if Constants.DEBUG:
-                                print(f"Received config: {message}")
-                        elif Constants.DEBUG:
-                            if message.strip() == "♡":
-                                if Constants.SEE_HEARTBEAT:
-                                    print(f"Cart {message}")
-                            else:
-                                if Constants.DEBUG:
-                                    print(f"Received message: {message}")
-                        return True
-                    except Exception as e:
-                        # Handle case where received bytes aren't valid UTF-8
-                        if str(e):  # Only print if there's an actual error message
-                            print(f"Received non-text data: {new_bytes.hex()}")
-            return False
-        except Exception as e:
-            if str(e):  # Only print if there's an actual error message
-                print(f"Error reading UART: {str(e)}")
-            return False
-
-    def cleanup(self):
-        """Clean shutdown"""
-        try:
-            self.uart.deinit()
-            print("UART cleaned up")
-        except Exception as e:
-            if str(e):  # Only print if there's an actual error message
-                print(f"Error during cleanup: {str(e)}")
-
-class UsbMIDI:
-    """Handles USB MIDI output"""
-    def __init__(self):
-        self.midi = usb_midi.ports[1]
-        print("USB MIDI initialized")
-
-    def send_message(self, message):
-        """Send raw MIDI message bytes"""
-        self.midi.write(bytes(message))
-
 class Bartleby:
     def __init__(self):
         print("\nWake Up Bartleby!")
         # System components
         self.hardware = None
         self.midi = None
-        self.uart = None
-        self.usb_midi = None
         self.detect_pin = None
         self.last_detect_state = True  # Start true since we set pin high
         
@@ -134,7 +51,6 @@ class Bartleby:
         # Run setup
         self._setup_hardware()
         self._setup_midi()
-        self._setup_uart()
         self._setup_initial_state()
         
     def _setup_hardware(self):
@@ -162,15 +78,7 @@ class Bartleby:
         # Create pot handler after mux is ready
         self.hardware['pots'] = PotentiometerHandler(self.hardware['control_mux'])
         
-        # Initialize USB MIDI
-        self.usb_midi = UsbMIDI()
-        
         time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
-
-    def _handle_midi_config(self, message):
-        """Handle MIDI configuration messages from Candide"""
-        if self.midi:
-            self.midi.handle_config_message(message)
 
     def _setup_keyboard(self):
         """Initialize keyboard multiplexers and handler"""
@@ -200,13 +108,17 @@ class Bartleby:
         )
 
     def _setup_midi(self):
-        """Initialize MIDI"""
-        self.midi = MidiLogic()
+        """Initialize MIDI with transport configuration"""
+        self.midi = MidiLogic(
+            midi_tx=Constants.MIDI_TX,
+            midi_rx=Constants.MIDI_RX,
+            midi_callback=self._handle_midi_config
+        )
 
-    def _setup_uart(self):
-        """Initialize UART for both MIDI and communication"""
-        print("Setting up UART...")
-        self.uart = UartHandler(midi_callback=self._handle_midi_config)
+    def _handle_midi_config(self, message):
+        """Handle MIDI configuration messages from Candide"""
+        if self.midi:
+            self.midi.handle_config_message(message)
 
     def _setup_initial_state(self):
         """Set initial system state"""
@@ -221,17 +133,17 @@ class Bartleby:
         if self.midi:
             self.midi.reset_cc_defaults()
 
-    def _play_greeting(self):
-        """Play welcome melody"""
-        greeting_notes = [60, 64, 67, 72]  # C E G C (ascending)
-        velocities = [80, 85, 90, 95]  # Gradually increasing velocity
-        durations = [0.2, 0.2, 0.2, 0.4]  # Last note slightly longer
+    # def _play_greeting(self):
+    #     """Play welcome melody"""
+    #     greeting_notes = [60, 64, 67, 72]  # C E G C (ascending)
+    #     velocities = [80, 85, 90, 95]  # Gradually increasing velocity
+    #     durations = [0.2, 0.2, 0.2, 0.4]  # Last note slightly longer
 
-        for note, velocity, duration in zip(greeting_notes, velocities, durations):
-            self._send_midi_event(('note_on', note, velocity, 0))
-            time.sleep(duration)  # Hold note
-            self._send_midi_event(('note_off', note, 0, 0))
-            time.sleep(0.05)  # Tiny gap between notes
+    #     for note, velocity, duration in zip(greeting_notes, velocities, durations):
+    #         self.midi.send_note_on(note, velocity, 0)
+    #         time.sleep(duration)  # Hold note
+    #         self.midi.send_note_off(note, 0, 0)
+    #         time.sleep(0.05)  # Tiny gap between notes
 
     def _handle_encoder_events(self, encoder_events):
         """Process encoder state changes"""
@@ -241,42 +153,7 @@ class Bartleby:
                 midi_events = self.midi.handle_octave_shift(direction)
                 if Constants.DEBUG:
                     print(f"Octave shifted {direction}: new position {self.hardware['encoders'].get_encoder_position(0)}")
-                for event in midi_events:
-                    self._send_midi_event(event)
-
-    def _send_midi_event(self, event):
-        """Send MIDI event via USB and hardware MIDI"""
-        event_type, *params = event
-
-        # Convert to MIDI messages
-        if event_type == 'note_on':
-            note, velocity, key_id = params
-            midi_msg = [0x90, note, velocity]
-        elif event_type == 'note_off':
-            note, velocity, key_id = params
-            midi_msg = [0x80, note, velocity]
-        elif event_type == 'control_change':
-            cc_num, value, _ = params
-            midi_msg = [0xB0, cc_num, value]
-        elif event_type == 'pressure_update':
-            # For MPE, pressure updates are handled by MidiLogic
-            # and converted to appropriate MIDI messages there
-            self.midi.send_midi_event(event)
-            return
-        elif event_type == 'pitch_bend':
-            value_lsb, value_msb, _ = params
-            midi_msg = [0xE0, value_lsb, value_msb]
-        else:
-            return
-
-        # Send via UART MIDI
-        self.uart.send_midi(midi_msg)
-        
-        # Send via USB MIDI
-        self.usb_midi.send_message(midi_msg)
-        
-        # Also send via USB MIDI through MidiLogic for MPE handling
-        self.midi.send_midi_event(event)
+                # MIDI events are handled internally by MidiLogic now
 
     def process_hardware(self):
         """Read and process all hardware inputs"""
@@ -330,17 +207,23 @@ class Bartleby:
             # Process all hardware
             changes = self.process_hardware()
             
-            # Check for UART messages and update connection state
-            if self.uart.check_for_messages():
+            # Check for MIDI messages and update connection state
+            # if self.midi.check_for_messages():
+            #     if not self.candide_connected:
+            #         print("Candide software connection established")
+            #         self.candide_connected = True
+            #         self.has_greeted = False  # Reset greeting flag on new connection
+                
+            #     if self.candide_connected and not self.has_greeted:
+            #         self._play_greeting()
+            #         self.has_greeted = True
+                
+            #     self.last_candide_message = time.monotonic()
+            
+            if self.midi.check_for_messages():
                 if not self.candide_connected:
                     print("Candide software connection established")
                     self.candide_connected = True
-                    self.has_greeted = False  # Reset greeting flag on new connection
-                
-                if self.candide_connected and not self.has_greeted:
-                    self._play_greeting()
-                    self.has_greeted = True
-                
                 self.last_candide_message = time.monotonic()
             
             # Check for connection timeout
@@ -350,15 +233,11 @@ class Bartleby:
             
             # Process MIDI events if hardware has changed
             if any(changes.values()):
-                midi_events = self.midi.update(
+                self.midi.update(
                     changes['keys'],
                     changes['pots'],
                     {}  # Empty config since we're not using instrument settings
                 )
-                
-                # Send each MIDI event
-                for event in midi_events:
-                    self._send_midi_event(event)
             
             return True
             
@@ -378,8 +257,8 @@ class Bartleby:
 
     def cleanup(self):
         """Clean shutdown"""
-        if self.uart:
-            self.uart.cleanup()
+        if self.midi:
+            self.midi.cleanup()
         if self.detect_pin:
             self.detect_pin.deinit()
         print("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁")

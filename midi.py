@@ -1,9 +1,15 @@
 import time
 import usb_midi
+import busio
 from collections import deque
 
 class Constants:
     DEBUG = True
+    
+    # MIDI Transport Settings
+    MIDI_BAUDRATE = 31250
+    UART_TIMEOUT = 0.001
+    SEE_HEARTBEAT = False
     
     # MPE Configuration
     MPE_MASTER_CHANNEL = 0      # MIDI channel 1 (zero-based)
@@ -56,6 +62,89 @@ class Constants:
         12: 24,                  # Pot 12: Unassigned (CC24)
         13: 25,                  # Pot 13: Unassigned (CC25)
     }
+
+class MidiTransportManager:
+    """Manages both UART and USB MIDI output streams"""
+    def __init__(self, tx_pin, rx_pin, midi_callback=None):
+        print(f"Initializing MIDI Transport Manager")
+        self.midi_callback = midi_callback
+        self._setup_uart(tx_pin, rx_pin)
+        self._setup_usb()
+        
+    def _setup_uart(self, tx_pin, rx_pin):
+        """Initialize UART for MIDI communication"""
+        try:
+            self.uart = busio.UART(
+                tx=tx_pin,
+                rx=rx_pin,
+                baudrate=Constants.MIDI_BAUDRATE,
+                bits=8,
+                parity=None,
+                stop=1,
+                timeout=Constants.UART_TIMEOUT
+            )
+            print("UART MIDI initialized")
+        except Exception as e:
+            print(f"UART initialization error: {str(e)}")
+            raise
+
+    def _setup_usb(self):
+        """Initialize USB MIDI output"""
+        try:
+            self.usb_midi = usb_midi.ports[1]
+            print("USB MIDI initialized")
+        except Exception as e:
+            print(f"USB MIDI initialization error: {str(e)}")
+            raise
+
+    def send_message(self, message):
+        """Send MIDI message to both UART and USB outputs"""
+        try:
+            # Send via UART
+            self.uart.write(bytes(message))
+            # Send via USB
+            self.usb_midi.write(bytes(message))
+        except Exception as e:
+            if str(e):  # Only print if there's an actual error message
+                print(f"Error sending MIDI: {str(e)}")
+
+    def check_for_messages(self):
+        """Check for incoming MIDI messages on UART"""
+        try:
+            if self.uart.in_waiting:
+                new_bytes = self.uart.read(self.uart.in_waiting)
+                if new_bytes:
+                    try:
+                        message = new_bytes.decode('utf-8')
+                        if message.startswith("cc:"):  # Configuration message
+                            if self.midi_callback:
+                                self.midi_callback(message)
+                            if Constants.DEBUG:
+                                print(f"Received config: {message}")
+                        elif Constants.DEBUG:
+                            if message.strip() == "♡":
+                                if Constants.SEE_HEARTBEAT:
+                                    print(f"Cart {message}")
+                            else:
+                                print(f"Received message: {message}")
+                        return True
+                    except Exception as e:
+                        if str(e):  # Only print if there's an actual error message
+                            print(f"Received non-text data: {new_bytes.hex()}")
+            return False
+        except Exception as e:
+            if str(e):
+                print(f"Error reading UART: {str(e)}")
+            return False
+
+    def cleanup(self):
+        """Clean shutdown of MIDI transport"""
+        try:
+            self.uart.deinit()
+            print("MIDI transport cleaned up")
+        except Exception as e:
+            if str(e):
+                print(f"Error during cleanup: {str(e)}")
 
 class CCConfigManager:
     """Manages CC assignments and configuration for pots"""
@@ -260,29 +349,84 @@ class MidiControlProcessor:
         self.cc_config.reset_to_defaults()
 
 class MidiLogic:
-    def __init__(self):
+    def __init__(self, midi_tx, midi_rx, midi_callback=None):
         self.channel_manager = MPEChannelManager()
         self.note_processor = MPENoteProcessor(self.channel_manager)
         self.control_processor = MidiControlProcessor()
-        self.midi_out = usb_midi.ports[1]
-        self.configure_mpe()
+        self.transport = MidiTransportManager(midi_tx, midi_rx, midi_callback)
+        self.ready_for_midi = False
+        self._configure_system()
 
-    def configure_mpe(self):
-        """Send MPE configuration messages"""
-        # Reset all channels
-        self._send_message(0xB0, 121, 0)  # Reset all controllers
-        self._send_message(0xB0, 123, 0)  # All notes off
+    def _configure_system(self):
+        """Initialize system with MPE configuration and greeting sequence"""
+        # Reset all channels first
+        self._send_message([0xB0, 121, 0])  # Reset all controllers
+        self._send_message([0xB0, 123, 0])  # All notes off
         
         # Configure MPE zone
-        self._send_message(0xB0, 101, Constants.RPN_MSB)       # RPN MSB
-        self._send_message(0xB0, 100, Constants.RPN_LSB_MPE)   # RPN LSB (MCM message)
-        self._send_message(0xB0, 6, Constants.MPE_ZONE_END)    # Number of member channels
+        self._send_message([0xB0, 101, Constants.RPN_MSB])       # RPN MSB
+        self._send_message([0xB0, 100, Constants.RPN_LSB_MPE])   # RPN LSB (MCM message)
+        self._send_message([0xB0, 6, Constants.MPE_ZONE_END])    # Number of member channels
         
         # Configure pitch bend range
-        self._send_message(0xB0, 101, 0)  # RPN MSB
-        self._send_message(0xB0, 100, 0)  # RPN LSB (pitch bend range)
-        self._send_message(0xB0, 6, Constants.MPE_PITCH_BEND_RANGE)  # Set pitch bend range
-        self._send_message(0xB0, 38, 0)   # LSB (always 0 for pitch bend range)
+        self._send_message([0xB0, 101, 0])  # RPN MSB
+        self._send_message([0xB0, 100, 0])  # RPN LSB (pitch bend range)
+        self._send_message([0xB0, 6, Constants.MPE_PITCH_BEND_RANGE])  # Set pitch bend range
+        self._send_message([0xB0, 38, 0])   # LSB (always 0 for pitch bend range)
+
+        # Always play greeting as part of configuration
+        self._play_greeting()
+        
+        # Now ready for regular MIDI
+        self.ready_for_midi = True
+        if Constants.DEBUG:
+            print("MIDI system ready for input")
+
+    def _play_greeting(self):
+        """Play greeting chime using MPE"""
+        if Constants.DEBUG:
+            print("Playing MPE greeting sequence")
+            
+        # Use negative key IDs to avoid conflicts with real keys
+        base_key_id = -1
+        base_pressure = 0.75  # Default pressure for greeting notes
+        
+        # Greeting sequence: C E G C (ascending)
+        greeting_notes = [60, 64, 67, 72]  # MIDI notes
+        velocities = [0.6, 0.7, 0.8, 0.9]  # Normalized velocities
+        durations = [0.2, 0.2, 0.2, 0.4]   # Note durations in seconds
+        
+        for idx, (note, velocity, duration) in enumerate(zip(greeting_notes, velocities, durations)):
+            key_id = base_key_id - idx  # Unique negative key ID for each note
+            
+            # Get MPE channel
+            channel = self.channel_manager.allocate_channel(key_id)
+            
+            # Initialize note state with full MPE parameters
+            note_state = self.channel_manager.add_note(key_id, note, channel, int(velocity * 127))
+            
+            # Send pitch bend (centered)
+            bend_value = Constants.PITCH_BEND_CENTER
+            lsb = bend_value & 0x7F
+            msb = (bend_value >> 7) & 0x7F
+            self._send_message([0xE0 | channel, lsb, msb])
+            
+            # Send initial pressure
+            pressure_value = int(base_pressure * 127)
+            self._send_message([0xD0 | channel, pressure_value, 0])
+            
+            # Send note on
+            self._send_message([0x90 | channel, note, int(velocity * 127)])
+            
+            # Hold note
+            time.sleep(duration)
+            
+            # Note off
+            self._send_message([0x80 | channel, note, 0])
+            self.channel_manager.release_note(key_id)
+            
+            # Small gap between notes
+            time.sleep(0.05)
 
     def handle_config_message(self, message):
         """Handle configuration message from Candide"""
@@ -292,19 +436,42 @@ class MidiLogic:
         """Reset CC assignments to defaults"""
         self.control_processor.reset_to_defaults()
 
-    def process_pot_changes(self, changed_pots, _):
-        return self.control_processor.process_pot_changes(changed_pots)
+    def check_for_messages(self):
+        """Check for incoming MIDI messages"""
+        return self.transport.check_for_messages()
 
-    def process_key_changes(self, changed_keys, config):
-        return self.note_processor.process_key_changes(changed_keys, config)
+    def _send_message(self, message):
+        """Send raw MIDI message via transport"""
+        # Configuration messages and greeting always allowed
+        if self.ready_for_midi or message[0] & 0xF0 in (0xB0, 0xF0) or not self.ready_for_midi:
+            self.transport.send_message(message)
 
-    def handle_octave_shift(self, direction):
-        return self.note_processor.handle_octave_shift(direction)
+    def send_note_on(self, note, velocity, key_id):
+        """Helper method for sending note on messages"""
+        if not self.ready_for_midi:
+            return
+        channel = self.channel_manager.allocate_channel(key_id)
+        self._send_message([0x90 | channel, note, velocity])
+
+    def send_note_off(self, note, velocity, key_id):
+        """Helper method for sending note off messages"""
+        if not self.ready_for_midi:
+            return
+        note_state = self.channel_manager.get_note_state(key_id)
+        if note_state:
+            self._send_message([0x80 | note_state.channel, note, velocity])
+            self.channel_manager.release_note(key_id)
 
     def update(self, changed_keys, changed_pots, config):
+        """Process hardware changes and send appropriate MIDI messages"""
+        if not self.ready_for_midi:
+            return []
+            
         midi_events = []
+        
+        # Process key changes first
         if changed_keys:
-            key_events = self.process_key_changes(changed_keys, config)
+            key_events = self.note_processor.process_key_changes(changed_keys, config)
             # Sort key events to ensure proper MPE order
             init_events = []
             note_events = []
@@ -321,17 +488,22 @@ class MidiLogic:
             midi_events.extend(init_events)
             midi_events.extend(note_events)
             midi_events.extend(update_events)
-            
+        
+        # Then process pot changes
         if changed_pots:
-            midi_events.extend(self.process_pot_changes(changed_pots, None))
-            
+            midi_events.extend(self.control_processor.process_pot_changes(changed_pots))
+        
+        # Send all events in order
         for event in midi_events:
             self.send_midi_event(event)
             
         return midi_events
 
     def send_midi_event(self, event):
-        """Send MIDI event via USB and UART"""
+        """Handle different types of MIDI events and send via transport"""
+        if not self.ready_for_midi:
+            return
+            
         event_type = event[0]
         params = event[1:]
         
@@ -345,7 +517,7 @@ class MidiLogic:
                 print(f"\nKey {key_id} Initial Pitch Bend:")
                 print(f"  Channel: {channel + 1}")
                 print(f"  Bend Value: {bend_value}")
-            self._send_message(0xE0 | channel, lsb, msb)
+            self._send_message([0xE0 | channel, lsb, msb])
             
         elif event_type == 'pressure_init':
             key_id, pressure = params
@@ -355,7 +527,7 @@ class MidiLogic:
                 print(f"\nKey {key_id} Initial Pressure:")
                 print(f"  Channel: {channel + 1}")
                 print(f"  Pressure: {pressure_value}")
-            self._send_message(0xD0 | channel, pressure_value, 0)
+            self._send_message([0xD0 | channel, pressure_value, 0])
                 
         elif event_type == 'note_on':
             midi_note, velocity, key_id = params
@@ -367,7 +539,7 @@ class MidiLogic:
                 print(f"    Channel: {channel + 1}")
                 print(f"    Note: {midi_note}")
                 print(f"    Velocity: {velocity}")
-            self._send_message(0x90 | channel, int(midi_note), velocity)
+            self._send_message([0x90 | channel, int(midi_note), velocity])
                 
         elif event_type == 'note_off':
             midi_note, velocity, key_id = params
@@ -378,7 +550,7 @@ class MidiLogic:
                     print(f"  Note OFF:")
                     print(f"    Channel: {note_state.channel + 1}")
                     print(f"    Note: {midi_note}")
-                self._send_message(0x80 | note_state.channel, int(midi_note), velocity)
+                self._send_message([0x80 | note_state.channel, int(midi_note), velocity])
                 self.channel_manager.release_note(key_id)
                     
         elif event_type == 'pressure_update':
@@ -406,10 +578,10 @@ class MidiLogic:
                     print(f"    Pitch Bend: {normalized_bend:+.3f}")
                 
                 # Send MPE Channel Pressure (Z-axis)
-                self._send_message(0xD0 | note_state.channel, pressure_value, 0)
+                self._send_message([0xD0 | note_state.channel, pressure_value, 0])
                 
                 # Send MPE Pitch Bend (X-axis)
-                self._send_message(0xE0 | note_state.channel, lsb, msb)
+                self._send_message([0xE0 | note_state.channel, lsb, msb])
                 
                 # Store pressure values
                 note_state.left_pressure = left
@@ -422,7 +594,7 @@ class MidiLogic:
                 print(f"  CC Number: {cc_number}")
                 print(f"  Value: {midi_value}")
             # Send CC messages on master channel
-            self._send_message(0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value)
+            self._send_message([0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value])
 
     def _calculate_pitch_bend(self, left, right):
         """Calculate pitch bend value from left/right pressure differential"""
@@ -430,10 +602,12 @@ class MidiLogic:
         normalized = (diff + 1) / 2  # Range: 0 to 1
         return int(normalized * Constants.PITCH_BEND_MAX)
 
-    def _send_message(self, status, data1, data2=0):
-        """Send raw MIDI message"""
-        self.midi_out.write(bytes([status, data1, data2]))
+    def handle_octave_shift(self, direction):
+        """Process octave shift and return MIDI events"""
+        if not self.ready_for_midi:
+            return []
+        return self.note_processor.handle_octave_shift(direction)
 
-    def handle_pressure(self, key_id, left_pressure, right_pressure):
-        """Helper method for direct pressure handling"""
-        self.send_midi_event(('pressure_update', key_id, left_pressure, right_pressure))
+    def cleanup(self):
+        """Clean shutdown"""
+        self.transport.cleanup()
