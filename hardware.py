@@ -106,50 +106,7 @@ class Multiplexer:
             return self.sig.value
         return 0
     
-class KeyMultiplexer:
-    def __init__(self, l1_sig_pin, l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin, 
-                 l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
-        self.sig = analogio.AnalogIn(l1_sig_pin)
 
-        # Initialize level 1 (MUX4) select pins
-        self.l1_select_pins = [
-            digitalio.DigitalInOut(pin) for pin in (l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin)
-        ]
-        for pin in self.l1_select_pins:
-            pin.direction = digitalio.Direction.OUTPUT
-
-        # Initialize level 2 (MUX3) select pins
-        self.l2_select_pins = [
-            digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
-        ]
-        for pin in self.l2_select_pins:
-            pin.direction = digitalio.Direction.OUTPUT
-
-    def select_channel(self, level, channel):
-        pins = self.l1_select_pins if level == 1 else self.l2_select_pins
-        for i, pin in enumerate(pins):
-            pin.value = (channel >> i) & 1
-
-    def read_channel(self):
-        return self.sig.value
-
-    def scan_keyboard(self):
-        raw_values = []
-        for i in range(4):
-            self.select_channel(1, i)  # Select a level 1 channel
-            time.sleep(0.001)  # Allow the mux to settle
-            
-            # Determine the number of channels to scan on MUX3 (level 2)
-            channels_to_scan = 16 if i < 3 else 2  # Last MUX only needs 2 channels
-            
-            # Scan the channels for the selected MUX3
-            for j in range(channels_to_scan):
-                self.select_channel(2, j)  # Select a level 2 channel
-                time.sleep(0.001)  # Allow the mux to settle
-                value = self.read_channel()  # Read the channel value
-                raw_values.append(value)
-        
-        return raw_values
 
 import rotaryio
 
@@ -273,32 +230,125 @@ class KeyState:
         self.right_value = 0
         self.last_update = 0
 
-class KeyboardHandler:
-    def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
-        self.l1a_mux = l1a_multiplexer
-        self.l1b_mux = l1b_multiplexer
+class KeyMultiplexer:
+    def __init__(self, sig_a_pin, sig_b_pin, l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin, 
+                 l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
+        """Initialize keyboard multiplexer with shared control pins for both banks"""
+        # Initialize the L1 signal pins
+        self.sig_a = analogio.AnalogIn(sig_a_pin)
+        self.sig_b = analogio.AnalogIn(sig_b_pin)
+        self.current_bank = 'a'  # Track which bank we're reading
         
-        # Initialize level 2 select pins
+        # Initialize L1 control pins (shared between banks)
+        self.l1_select_pins = [
+            digitalio.DigitalInOut(pin) for pin in (l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin)
+        ]
+        for pin in self.l1_select_pins:
+            pin.direction = digitalio.Direction.OUTPUT
+            pin.value = False
+
+        # Initialize L2 select pins (shared between banks)
         self.l2_select_pins = [
             digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
         ]
         for pin in self.l2_select_pins:
             pin.direction = digitalio.Direction.OUTPUT
             pin.value = False
+
+        # Define scanning configurations
+        self.l2a_active_channels = 10  # Channels 1-10 for keys 0-4
+        self.l2b_active_channels = 14  # Channels 1-14 for keys 18-24
+        self.l1_direct_channels = 14   # Channels 1-14 for direct connections
+        self.settling_time = 0.001     # 1ms settling time
+
+    def select_bank(self, bank):
+        """Select which bank to read from (a or b)"""
+        self.current_bank = bank
+
+    def set_l1_channel(self, channel):
+        """Set Level 1 multiplexer channel (0-15)"""
+        if 0 <= channel < 16:
+            for i, pin in enumerate(self.l1_select_pins):
+                pin.value = bool((channel >> i) & 1)
+            time.sleep(self.settling_time)
+
+    def set_l2_channel(self, channel):
+        """Set Level 2 multiplexer channel (0-15)"""
+        if 0 <= channel < 16:
+            for i, pin in enumerate(self.l2_select_pins):
+                pin.value = bool((channel >> i) & 1)
+            time.sleep(self.settling_time)
+
+    def read_current_channel(self):
+        """Read the currently selected channel's value from current bank"""
+        return self.sig_a.value if self.current_bank == 'a' else self.sig_b.value
+
+    def scan_all_channels(self, bank):
+        """Scan all valid channel combinations for specified bank and return raw readings"""
+        readings = []
+        self.select_bank(bank)
+        
+        if bank == 'a':
+            # First read L2A channels through L1A channel 0
+            self.set_l1_channel(0)  # Select L2A input
+            for channel in range(1, self.l2a_active_channels + 1):
+                self.set_l2_channel(channel)
+                readings.append(self.read_current_channel())
             
-        # Initialize key states for dual-phase detection
-        self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
-        self.active_keys = []
-        self.key_hardware_data = {}
+            # Then read L1A direct channels
+            for channel in range(1, self.l1_direct_channels + 1):
+                self.set_l1_channel(channel)
+                readings.append(self.read_current_channel())
+                
+        else:  # bank == 'b'
+            # First read L2B channels through L1B channel 0
+            self.set_l1_channel(0)  # Select L2B input
+            for channel in range(1, self.l2b_active_channels + 1):
+                self.set_l2_channel(channel)
+                readings.append(self.read_current_channel())
+            
+            # Then read L1B direct channels
+            for channel in range(1, self.l1_direct_channels + 1):
+                self.set_l1_channel(channel)
+                readings.append(self.read_current_channel())
+
+        return readings
+
+    def cleanup(self):
+        """Clean up GPIO pins"""
+        self.sig_a.deinit()
+        self.sig_b.deinit()
+        for pin in self.l1_select_pins + self.l2_select_pins:
+            pin.deinit()
+
+class KeyDataProcessor:
+    """Handles conversion of physical measurements to musical expression"""
+    def __init__(self):
+        pass
         
-    def adc_to_resistance(self, adc_value):
-        """Convert ADC reading to resistance value"""
-        voltage = (adc_value / Constants.ADC_MAX) * 3.3
-        if voltage >= Constants.REST_VOLTAGE_THRESHOLD:  # Using updated threshold
-            return float('inf')
-        return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
+    def process_key_data(self, left_resistance, right_resistance, current_state):
+        """Process resistance values into musical parameters"""
+        # Calculate pressure
+        left_pressure = self._normalize_pressure(left_resistance)
+        right_pressure = self._normalize_pressure(right_resistance)
         
-    def normalize_resistance(self, resistance):
+        avg_pressure = (left_pressure + right_pressure) / 2
+        
+        # Calculate velocity based on pressure and state
+        velocity = self._calculate_velocity(avg_pressure)
+        
+        # Calculate pitch bend from pressure differential
+        pitch_bend = self._calculate_pitch_bend(left_pressure, right_pressure)
+        
+        return {
+            'pressure': avg_pressure,
+            'velocity': velocity,
+            'pitch_bend': pitch_bend,
+            'left_pressure': left_pressure,
+            'right_pressure': right_pressure
+        }
+        
+    def _normalize_pressure(self, resistance):
         """Convert resistance to normalized pressure value with multi-stage envelope"""
         if resistance >= Constants.MAX_VK_RESISTANCE:
             return 0
@@ -312,7 +362,7 @@ class KeyboardHandler:
             range_min = Constants.ENVELOPE_LIGHT_R
             curve = Constants.ENVELOPE_LIGHT_CURVE
             out_min = 0.0
-            out_max = 0.3  # Maps to start of mid range
+            out_max = 0.3
             
         elif resistance >= Constants.ENVELOPE_MID_R:
             # Mid pressure section - more gradual
@@ -320,7 +370,7 @@ class KeyboardHandler:
             range_min = Constants.ENVELOPE_MID_R
             curve = Constants.ENVELOPE_MID_CURVE
             out_min = 0.3
-            out_max = 0.7  # Maps to start of heavy range
+            out_max = 0.7
             
         elif resistance >= Constants.ENVELOPE_HEAVY_R:
             # Heavy pressure section - quick ramp to max
@@ -344,128 +394,176 @@ class KeyboardHandler:
         # Apply curve and scale to section's output range
         curved = pow(pos, curve)
         return out_min + (curved * (out_max - out_min))
-            
-    def check_key_activation(self, left_norm, right_norm, key_state):
-        """Implement dual-phase activation logic"""
-        max_pressure = max(left_norm, right_norm)
-        
-        if key_state.active:
-            # Key is already active - use tracking threshold
-            if max_pressure < Constants.DEACTIVATION_THRESHOLD:
-                key_state.active = False
-                return False
-            return True
-        else:
-            # Key is inactive - use initial activation threshold
-            if max_pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
-                key_state.active = True
-                return True
-            return False
-        
-    def set_l2_channel(self, channel):
-        """Set L2 multiplexer channel"""
-        for i, pin in enumerate(self.l2_select_pins):
-            pin.value = (channel >> i) & 1
-        time.sleep(0.0001)  # 100 microseconds settling time
-            
-    def read_keys(self):
-        """Read all keys with dual-phase detection"""
-        changed_keys = []
-        current_active_keys = []
-        self.key_hardware_data.clear()
-        
-        key_index = 0
-        
-        # Read first group (keys 1-5) from L2 Mux A through L1 Mux A channel 0
-        for channel in range(1, 11, 2):
-            self.set_l2_channel(channel)
-            left_value = self.l1a_mux.read_channel(0)
-            
-            self.set_l2_channel(channel + 1)
-            right_value = self.l1a_mux.read_channel(0)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read second group (keys 6-12) directly from L1 Mux A
-        for channel in range(1, 15, 2):
-            left_value = self.l1a_mux.read_channel(channel)
-            right_value = self.l1a_mux.read_channel(channel + 1)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read third group (keys 13-19) directly from L1 Mux B
-        for channel in range(1, 15, 2):
-            left_value = self.l1b_mux.read_channel(channel)
-            right_value = self.l1b_mux.read_channel(channel + 1)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read final group (keys 20-25) from L2 Mux B through L1 Mux B channel 0
-        for channel in range(1, 13, 2):
-            self.set_l2_channel(channel)
-            left_value = self.l1b_mux.read_channel(0)
-            
-            self.set_l2_channel(channel + 1)
-            right_value = self.l1b_mux.read_channel(0)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        self.active_keys = current_active_keys
-        return changed_keys
-        
-    def _process_key_reading(self, key_index, left_value, right_value, 
-                           current_active_keys, changed_keys):
-        """Process individual key readings with dual-phase detection"""
-        # Get normalized pressure values
-        left_resistance = self.adc_to_resistance(left_value)
-        right_resistance = self.adc_to_resistance(right_value)
-        left_normalized = self.normalize_resistance(left_resistance)
-        right_normalized = self.normalize_resistance(right_resistance)
-        
-        # Store hardware data
-        self.key_hardware_data[key_index] = (left_normalized, right_normalized)
-        
-        # Get key state
-        key_state = self.key_states[key_index]
-        
-        # Check activation using dual-phase logic
-        is_active = self.check_key_activation(left_normalized, right_normalized, key_state)
-        
-        if is_active:
-            current_active_keys.append(key_index)
-            
-            # Debug output (kept from original)
-            if Constants.DEBUG:
-                print(f"\nKey {key_index:02d}")
-                print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
-                print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
-        
-        # Record changes
-        if (left_normalized != key_state.left_value or 
-            right_normalized != key_state.right_value):
-            key_state.left_value = left_normalized
-            key_state.right_value = right_normalized
-            key_state.last_update = time.monotonic()
-            changed_keys.append((key_index, left_normalized, right_normalized))
-            
-    def format_key_hardware_data(self):
-        """Format hardware data for debugging"""
-        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}
-        
-    @staticmethod
-    def calculate_pitch_bend(left_pressure, right_pressure):
+    
+    def _calculate_velocity(self, pressure):
+        """Calculate note velocity from pressure"""
+        return int(pressure * 127)
+    
+    def _calculate_pitch_bend(self, left_pressure, right_pressure):
         """Calculate pitch bend from pressure differential"""
         pressure_diff = right_pressure - left_pressure
         max_pressure = max(left_pressure, right_pressure)
         if max_pressure == 0:
             return 0
         normalized_diff = pressure_diff / max_pressure
-        return max(-1, min(1, normalized_diff))  # Ensure the result is between -1 and 1
+        return max(-1, min(1, normalized_diff))
+    
+class KeyState:
+    """Tracks the physical state of a single key"""
+    # State definitions
+    INACTIVE = 0
+    INITIAL_TOUCH = 1
+    ACTIVE = 2
+    RELEASE_PENDING = 3
+    RELEASED = 4
+
+    def __init__(self):
+        self.state = self.INACTIVE
+        self.left_resistance = float('inf')
+        self.right_resistance = float('inf')
+        self.last_update = 0
+        
+class KeyboardHandler:
+    def __init__(self, keyboard_mux, data_processor):
+        """Initialize keyboard handler with multiplexer and data processor"""
+        self.mux = keyboard_mux
+        self.data_processor = data_processor
+        self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
+        self.active_keys = []
+        self.key_hardware_data = {}
+        
+    def read_keys(self):
+        """Read all keys and process their states"""
+        changed_keys = []
+        current_active_keys = []
+        self.key_hardware_data.clear()
+        
+        # Get raw readings from both banks
+        readings_a = self.mux.scan_all_channels('a')
+        readings_b = self.mux.scan_all_channels('b')
+        
+        # Process keys 0-4 (through L2A, first 10 readings from bank A in pairs)
+        for i in range(0, 10, 2):
+            key_index = i // 2
+            left_value = readings_a[i]
+            right_value = readings_a[i + 1]
+            self._process_key_reading(key_index, left_value, right_value, 
+                                   current_active_keys, changed_keys)
+
+        # Process keys 5-11 (direct on L1A, next 14 readings from bank A in pairs)
+        l1a_base_idx = 10
+        for i in range(0, 14, 2):
+            key_index = 5 + (i // 2)
+            left_value = readings_a[l1a_base_idx + i]
+            right_value = readings_a[l1a_base_idx + i + 1]
+            self._process_key_reading(key_index, left_value, right_value, 
+                                   current_active_keys, changed_keys)
+
+        # Process keys 12-17 (direct on L1B, first 14 readings from bank B in pairs)
+        l1b_direct_readings = readings_b[14:]
+        for i in range(0, 14, 2):
+            key_index = 12 + (i // 2)
+            left_value = l1b_direct_readings[i]
+            right_value = l1b_direct_readings[i + 1]
+            self._process_key_reading(key_index, left_value, right_value, 
+                                   current_active_keys, changed_keys)
+
+        # Process keys 18-24 (through L2B, first 14 readings from bank B in pairs)
+        l2b_readings = readings_b[:14]
+        for i in range(0, 14, 2):
+            key_index = 18 + (i // 2)
+            left_value = l2b_readings[i]
+            right_value = l2b_readings[i + 1]
+            self._process_key_reading(key_index, left_value, right_value, 
+                                   current_active_keys, changed_keys)
+            
+        self.active_keys = current_active_keys
+        return changed_keys
+
+    def _process_key_reading(self, key_index, left_adc, right_adc, 
+                           current_active_keys, changed_keys):
+        """Process individual key readings and manage state transitions"""
+        # Convert ADC to resistance
+        left_resistance = self._adc_to_resistance(left_adc)
+        right_resistance = self._adc_to_resistance(right_adc)
+        
+        key_state = self.key_states[key_index]
+        
+        # Determine if electrical values have changed
+        values_changed = (
+            left_resistance != key_state.left_resistance or 
+            right_resistance != key_state.right_resistance
+        )
+        
+        # Get processed pressure values from data processor
+        processed_data = self.data_processor.process_key_data(
+            left_resistance, right_resistance, key_state.state
+        )
+        
+        # Handle state transitions
+        new_state = self._update_key_state(
+            key_state, processed_data['pressure'], processed_data['velocity']
+        )
+        
+        # Store hardware data for debugging
+        self.key_hardware_data[key_index] = (left_resistance, right_resistance)
+        
+        # Track active keys
+        if new_state in (KeyState.ACTIVE, KeyState.INITIAL_TOUCH):
+            current_active_keys.append(key_index)
+            
+            # Debug output
+            if Constants.DEBUG:
+                print(f"\nKey {key_index:02d}")
+                print(f"  L: ADC={left_adc:5d} → R={left_resistance:8.1f}Ω")
+                print(f"  R: ADC={right_adc:5d} → R={right_resistance:8.1f}Ω")
+        
+        # Record state changes
+        if values_changed or new_state != key_state.state:
+            key_state.left_resistance = left_resistance
+            key_state.right_resistance = right_resistance
+            key_state.state = new_state
+            key_state.last_update = time.monotonic()
+            changed_keys.append((key_index, processed_data['pressure'], 
+                               processed_data['pitch_bend']))
+    
+    def _update_key_state(self, key_state, pressure, velocity):
+        """Handle state machine transitions"""
+        current_state = key_state.state
+        
+        if current_state == KeyState.INACTIVE:
+            if pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
+                return KeyState.INITIAL_TOUCH
+                
+        elif current_state == KeyState.INITIAL_TOUCH:
+            if pressure < Constants.DEACTIVATION_THRESHOLD:
+                return KeyState.INACTIVE
+            return KeyState.ACTIVE
+                
+        elif current_state == KeyState.ACTIVE:
+            if pressure < Constants.TRACKING_THRESHOLD:
+                return KeyState.RELEASE_PENDING
+                
+        elif current_state == KeyState.RELEASE_PENDING:
+            if pressure > Constants.TRACKING_THRESHOLD:
+                return KeyState.ACTIVE
+            elif pressure < Constants.DEACTIVATION_THRESHOLD:
+                return KeyState.RELEASED
+                
+        elif current_state == KeyState.RELEASED:
+            if pressure < Constants.DEACTIVATION_THRESHOLD:
+                return KeyState.INACTIVE
+            return KeyState.ACTIVE
+            
+        return current_state
+    
+    def _adc_to_resistance(self, adc_value):
+        """Convert ADC reading to resistance value"""
+        voltage = (adc_value / Constants.ADC_MAX) * 3.3
+        if voltage >= Constants.REST_VOLTAGE_THRESHOLD:
+            return float('inf')
+        return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
+
+    def format_key_hardware_data(self):
+        """Format hardware data for debugging"""
+        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}

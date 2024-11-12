@@ -2,7 +2,7 @@ import board
 import digitalio
 import time
 from hardware import (
-    Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
+    Multiplexer, KeyMultiplexer, KeyboardHandler, KeyDataProcessor, RotaryEncoderHandler, 
     PotentiometerHandler, Constants as HWConstants
 )
 from midi import MidiLogic
@@ -81,31 +81,27 @@ class Bartleby:
         time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
 
     def _setup_keyboard(self):
-        """Initialize keyboard multiplexers and handler"""
-        keyboard_l1a = Multiplexer(
-            HWConstants.KEYBOARD_L1A_MUX_SIG,
-            HWConstants.KEYBOARD_L1A_MUX_S0,
-            HWConstants.KEYBOARD_L1A_MUX_S1,
-            HWConstants.KEYBOARD_L1A_MUX_S2,
-            HWConstants.KEYBOARD_L1A_MUX_S3
+        """Initialize keyboard multiplexer and handler with shared control pins"""
+        keyboard_mux = KeyMultiplexer(
+            # Signal pins for both banks
+            sig_a_pin=HWConstants.KEYBOARD_L1A_MUX_SIG,
+            sig_b_pin=HWConstants.KEYBOARD_L1B_MUX_SIG,
+            # Shared L1 control pins (using L1A pins)
+            l1_s0_pin=HWConstants.KEYBOARD_L1A_MUX_S0,
+            l1_s1_pin=HWConstants.KEYBOARD_L1A_MUX_S1,
+            l1_s2_pin=HWConstants.KEYBOARD_L1A_MUX_S2,
+            l1_s3_pin=HWConstants.KEYBOARD_L1A_MUX_S3,
+            # Shared L2 control pins
+            l2_s0_pin=HWConstants.KEYBOARD_L2_MUX_S0,
+            l2_s1_pin=HWConstants.KEYBOARD_L2_MUX_S1,
+            l2_s2_pin=HWConstants.KEYBOARD_L2_MUX_S2,
+            l2_s3_pin=HWConstants.KEYBOARD_L2_MUX_S3
         )
         
-        keyboard_l1b = Multiplexer(
-            HWConstants.KEYBOARD_L1B_MUX_SIG,
-            HWConstants.KEYBOARD_L1B_MUX_S0,
-            HWConstants.KEYBOARD_L1B_MUX_S1,
-            HWConstants.KEYBOARD_L1B_MUX_S2,
-            HWConstants.KEYBOARD_L1B_MUX_S3
-        )
+        # Create the data processor
+        data_processor = KeyDataProcessor()
         
-        return KeyboardHandler(
-            keyboard_l1a,
-            keyboard_l1b,
-            HWConstants.KEYBOARD_L2_MUX_S0,
-            HWConstants.KEYBOARD_L2_MUX_S1,
-            HWConstants.KEYBOARD_L2_MUX_S2,
-            HWConstants.KEYBOARD_L2_MUX_S3
-        )
+        return KeyboardHandler(keyboard_mux, data_processor)
 
     def _setup_midi(self):
         """Initialize MIDI with transport configuration"""
