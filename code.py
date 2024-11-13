@@ -9,6 +9,7 @@ from midi import MidiLogic
 
 class Constants:
     DEBUG = False
+    SEE_HEARTBEAT = True
     SETUP_DELAY = 0.1
     MIDI_TX = board.GP16
     MIDI_RX = board.GP17
@@ -17,6 +18,7 @@ class Constants:
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
     CONNECTION_TIMEOUT = 1.0
+    
 
 class StateManager:
     def __init__(self):
@@ -209,7 +211,24 @@ class Bartleby:
             # Process hardware and MIDI
             changes = self.hardware.read_hardware_state(self.state_manager)
             
-            if self.midi.check_for_messages():
+            if self.midi.transport.uart.in_waiting:
+                new_bytes = self.midi.transport.uart.read(self.midi.transport.uart.in_waiting)
+                if new_bytes:
+                    try:
+                        message = new_bytes.decode('utf-8')
+                        if message.startswith("cc:"):
+                            self._handle_midi_config(message)
+                            if Constants.DEBUG:
+                                print(f"Received config: {message}")
+                        elif Constants.DEBUG:
+                            if message.strip() == "♡":
+                                if Constants.SEE_HEARTBEAT:
+                                    print("Heartbeat received")
+                            else:
+                                print(f"Received message: {message}")
+                    except Exception as e:
+                        if str(e):
+                            print(f"Received non-text data: {new_bytes.hex()}")
                 self.connection_manager.handle_message_received()
             elif self.connection_manager.check_connection_timeout():
                 if self.midi:

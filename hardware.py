@@ -5,7 +5,10 @@ import rotaryio
 import analogio
 
 class Constants:
+    # Logging
     DEBUG = True
+    POT_LOG_THRESHOLD = 0.01  
+
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1
@@ -44,7 +47,6 @@ class Constants:
     POT_LOWER_TRIM = 0.05
     POT_UPPER_TRIM = 0.0
     NUM_POTS = 14
-    POT_LOG_THRESHOLD = 0.05  # Only log pot changes greater than 5%
     
     # Keyboard Handler Constants
     NUM_KEYS = 25

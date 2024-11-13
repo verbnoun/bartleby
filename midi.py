@@ -5,7 +5,6 @@ from collections import deque
 
 class Constants:
     DEBUG = False
-    SEE_HEARTBEAT = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -107,35 +106,6 @@ class MidiTransportManager:
         except Exception as e:
             if str(e):
                 print(f"Error sending MIDI message {message.hex() if hasattr(message, 'hex') else message}: {str(e)}")
-
-    def check_for_messages(self):
-        """Check for incoming MIDI messages on UART"""
-        try:
-            if self.uart.in_waiting:
-                new_bytes = self.uart.read(self.uart.in_waiting)
-                if new_bytes:
-                    try:
-                        message = new_bytes.decode('utf-8')
-                        if message.startswith("cc:"):
-                            if self.midi_callback:
-                                self.midi_callback(message)
-                            if Constants.DEBUG:
-                                print(f"Received config: {message}")
-                        elif Constants.DEBUG:
-                            if message.strip() == "♡":
-                                if Constants.SEE_HEARTBEAT:
-                                    print("Heartbeat received")
-                            else:
-                                print(f"Received message: {message}")
-                        return True
-                    except Exception as e:
-                        if str(e):
-                            print(f"Received non-text data: {new_bytes.hex()}")
-            return False
-        except Exception as e:
-            if str(e):
-                print(f"Error reading UART: {str(e)}")
-            return False
 
     def cleanup(self):
         """Clean shutdown of MIDI transport"""
@@ -588,9 +558,6 @@ class MidiLogic:
 
     def reset_cc_defaults(self):
         self.control_processor.reset_to_defaults()
-
-    def check_for_messages(self):
-        return self.transport.check_for_messages()
 
     def update(self, changed_keys, changed_pots, config):
         if not self.message_sender.ready_for_midi:
