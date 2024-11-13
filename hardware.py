@@ -6,7 +6,7 @@ import rotaryio
 import analogio
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1

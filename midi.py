@@ -4,7 +4,7 @@ import busio
 from collections import deque
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250

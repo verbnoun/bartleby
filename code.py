@@ -8,7 +8,7 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     SEE_HEARTBEAT = False
 
     # Hardware Setup Delay
