@@ -151,7 +151,218 @@ class KeyMultiplexer:
         
         return raw_values
 
-import rotaryio
+class PressureSensorProcessor:
+    def adc_to_resistance(self, adc_value):
+        """Convert ADC reading to resistance value"""
+        voltage = (adc_value / Constants.ADC_MAX) * 3.3
+        if voltage >= Constants.REST_VOLTAGE_THRESHOLD:
+            return float('inf')
+        return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
+        
+    def normalize_resistance(self, resistance):
+        """Convert resistance to normalized pressure value with multi-stage envelope"""
+        if resistance >= Constants.MAX_VK_RESISTANCE:
+            return 0
+        if resistance <= Constants.MIN_VK_RESISTANCE:
+            return 1
+            
+        # Determine which envelope section we're in
+        if resistance >= Constants.ENVELOPE_LIGHT_R:
+            # Light touch section - quick ramp
+            range_max = Constants.MAX_VK_RESISTANCE
+            range_min = Constants.ENVELOPE_LIGHT_R
+            curve = Constants.ENVELOPE_LIGHT_CURVE
+            out_min = 0.0
+            out_max = 0.3  # Maps to start of mid range
+            
+        elif resistance >= Constants.ENVELOPE_MID_R:
+            # Mid pressure section - more gradual
+            range_max = Constants.ENVELOPE_LIGHT_R
+            range_min = Constants.ENVELOPE_MID_R
+            curve = Constants.ENVELOPE_MID_CURVE
+            out_min = 0.3
+            out_max = 0.7  # Maps to start of heavy range
+            
+        elif resistance >= Constants.ENVELOPE_HEAVY_R:
+            # Heavy pressure section - quick ramp to max
+            range_max = Constants.ENVELOPE_MID_R
+            range_min = Constants.ENVELOPE_HEAVY_R
+            curve = Constants.ENVELOPE_HEAVY_CURVE
+            out_min = 0.7
+            out_max = 0.9
+            
+        else:
+            # Final ramp to max pressure
+            range_max = Constants.ENVELOPE_HEAVY_R
+            range_min = Constants.MIN_VK_RESISTANCE
+            curve = Constants.ENVELOPE_HEAVY_CURVE
+            out_min = 0.9
+            out_max = 1.0
+
+        # Calculate normalized position within this section
+        pos = (range_max - resistance) / (range_max - range_min)
+        
+        # Apply curve and scale to section's output range
+        curved = pow(pos, curve)
+        return out_min + (curved * (out_max - out_min))
+
+class KeyState:
+    def __init__(self):
+        self.active = False
+        self.left_value = 0
+        self.right_value = 0
+        self.last_update = 0
+
+class KeyStateTracker:
+    def __init__(self):
+        self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
+        self.active_keys = []
+        self.key_hardware_data = {}
+
+    def check_key_activation(self, left_norm, right_norm, key_state):
+        """Implement dual-phase activation logic"""
+        max_pressure = max(left_norm, right_norm)
+        
+        if key_state.active:
+            # Key is already active - use tracking threshold
+            if max_pressure < Constants.DEACTIVATION_THRESHOLD:
+                key_state.active = False
+                return False
+            return True
+        else:
+            # Key is inactive - use initial activation threshold
+            if max_pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
+                key_state.active = True
+                return True
+            return False
+
+    def update_key_state(self, key_index, left_normalized, right_normalized):
+        """Update state for a single key and determine if it changed"""
+        key_state = self.key_states[key_index]
+        is_active = self.check_key_activation(left_normalized, right_normalized, key_state)
+        
+        # Store hardware data
+        self.key_hardware_data[key_index] = (left_normalized, right_normalized)
+        
+        if is_active:
+            if key_index not in self.active_keys:
+                self.active_keys.append(key_index)
+        else:
+            if key_index in self.active_keys:
+                self.active_keys.remove(key_index)
+
+        # Check if state changed
+        if (left_normalized != key_state.left_value or 
+            right_normalized != key_state.right_value):
+            key_state.left_value = left_normalized
+            key_state.right_value = right_normalized
+            key_state.last_update = time.monotonic()
+            return True
+        return False
+
+    def format_key_hardware_data(self):
+        """Format hardware data for debugging"""
+        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}
+
+class KeyboardHandler:
+    def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
+        self.l1a_mux = l1a_multiplexer
+        self.l1b_mux = l1b_multiplexer
+        
+        # Initialize level 2 select pins
+        self.l2_select_pins = [
+            digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
+        ]
+        for pin in self.l2_select_pins:
+            pin.direction = digitalio.Direction.OUTPUT
+            pin.value = False
+
+        # Initialize support classes
+        self.pressure_processor = PressureSensorProcessor()
+        self.state_tracker = KeyStateTracker()
+            
+    def set_l2_channel(self, channel):
+        """Set L2 multiplexer channel"""
+        for i, pin in enumerate(self.l2_select_pins):
+            pin.value = (channel >> i) & 1
+        time.sleep(0.0001)  # 100 microseconds settling time
+            
+    def read_keys(self):
+        """Read all keys with dual-phase detection"""
+        changed_keys = []
+        key_index = 0
+        
+        # Read first group (keys 1-5) from L2 Mux A through L1 Mux A channel 0
+        for channel in range(1, 11, 2):
+            self.set_l2_channel(channel)
+            left_value = self.l1a_mux.read_channel(0)
+            
+            self.set_l2_channel(channel + 1)
+            right_value = self.l1a_mux.read_channel(0)
+            
+            self._process_key_reading(key_index, left_value, right_value, changed_keys)
+            key_index += 1
+            
+        # Read second group (keys 6-12) directly from L1 Mux A
+        for channel in range(1, 15, 2):
+            left_value = self.l1a_mux.read_channel(channel)
+            right_value = self.l1a_mux.read_channel(channel + 1)
+            
+            self._process_key_reading(key_index, left_value, right_value, changed_keys)
+            key_index += 1
+            
+        # Read third group (keys 13-19) directly from L1 Mux B
+        for channel in range(1, 15, 2):
+            left_value = self.l1b_mux.read_channel(channel)
+            right_value = self.l1b_mux.read_channel(channel + 1)
+            
+            self._process_key_reading(key_index, left_value, right_value, changed_keys)
+            key_index += 1
+            
+        # Read final group (keys 20-25) from L2 Mux B through L1 Mux B channel 0
+        for channel in range(1, 13, 2):
+            self.set_l2_channel(channel)
+            left_value = self.l1b_mux.read_channel(0)
+            
+            self.set_l2_channel(channel + 1)
+            right_value = self.l1b_mux.read_channel(0)
+            
+            self._process_key_reading(key_index, left_value, right_value, changed_keys)
+            key_index += 1
+            
+        return changed_keys
+        
+    def _process_key_reading(self, key_index, left_value, right_value, changed_keys):
+        """Process individual key readings with dual-phase detection"""
+        # Get normalized pressure values
+        left_resistance = self.pressure_processor.adc_to_resistance(left_value)
+        right_resistance = self.pressure_processor.adc_to_resistance(right_value)
+        left_normalized = self.pressure_processor.normalize_resistance(left_resistance)
+        right_normalized = self.pressure_processor.normalize_resistance(right_resistance)
+        
+        # Update state and check for changes
+        if self.state_tracker.update_key_state(key_index, left_normalized, right_normalized):
+            changed_keys.append((key_index, left_normalized, right_normalized))
+            
+            # Debug output
+            if Constants.DEBUG:
+                print(f"\nKey {key_index:02d}")
+                print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
+                print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
+        
+    def format_key_hardware_data(self):
+        """Format hardware data for debugging"""
+        return self.state_tracker.format_key_hardware_data()
+        
+    @staticmethod
+    def calculate_pitch_bend(left_pressure, right_pressure):
+        """Calculate pitch bend from pressure differential"""
+        pressure_diff = right_pressure - left_pressure
+        max_pressure = max(left_pressure, right_pressure)
+        if max_pressure == 0:
+            return 0
+        normalized_diff = pressure_diff / max_pressure
+        return max(-1, min(1, normalized_diff))  # Ensure the result is between -1 and 1
 
 class RotaryEncoderHandler:
     def __init__(self, octave_clk_pin, octave_dt_pin):
@@ -218,7 +429,6 @@ class RotaryEncoderHandler:
             return self.encoder_positions[encoder_num]
         return 0
 
-
 class PotentiometerHandler:
     def __init__(self, multiplexer):
         self.multiplexer = multiplexer
@@ -265,207 +475,3 @@ class PotentiometerHandler:
                     self.last_change[i] = change
                 
         return changed_pots
-
-class KeyState:
-    def __init__(self):
-        self.active = False
-        self.left_value = 0
-        self.right_value = 0
-        self.last_update = 0
-
-class KeyboardHandler:
-    def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
-        self.l1a_mux = l1a_multiplexer
-        self.l1b_mux = l1b_multiplexer
-        
-        # Initialize level 2 select pins
-        self.l2_select_pins = [
-            digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
-        ]
-        for pin in self.l2_select_pins:
-            pin.direction = digitalio.Direction.OUTPUT
-            pin.value = False
-            
-        # Initialize key states for dual-phase detection
-        self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
-        self.active_keys = []
-        self.key_hardware_data = {}
-        
-    def adc_to_resistance(self, adc_value):
-        """Convert ADC reading to resistance value"""
-        voltage = (adc_value / Constants.ADC_MAX) * 3.3
-        if voltage >= Constants.REST_VOLTAGE_THRESHOLD:  # Using updated threshold
-            return float('inf')
-        return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
-        
-    def normalize_resistance(self, resistance):
-        """Convert resistance to normalized pressure value with multi-stage envelope"""
-        if resistance >= Constants.MAX_VK_RESISTANCE:
-            return 0
-        if resistance <= Constants.MIN_VK_RESISTANCE:
-            return 1
-            
-        # Determine which envelope section we're in
-        if resistance >= Constants.ENVELOPE_LIGHT_R:
-            # Light touch section - quick ramp
-            range_max = Constants.MAX_VK_RESISTANCE
-            range_min = Constants.ENVELOPE_LIGHT_R
-            curve = Constants.ENVELOPE_LIGHT_CURVE
-            out_min = 0.0
-            out_max = 0.3  # Maps to start of mid range
-            
-        elif resistance >= Constants.ENVELOPE_MID_R:
-            # Mid pressure section - more gradual
-            range_max = Constants.ENVELOPE_LIGHT_R
-            range_min = Constants.ENVELOPE_MID_R
-            curve = Constants.ENVELOPE_MID_CURVE
-            out_min = 0.3
-            out_max = 0.7  # Maps to start of heavy range
-            
-        elif resistance >= Constants.ENVELOPE_HEAVY_R:
-            # Heavy pressure section - quick ramp to max
-            range_max = Constants.ENVELOPE_MID_R
-            range_min = Constants.ENVELOPE_HEAVY_R
-            curve = Constants.ENVELOPE_HEAVY_CURVE
-            out_min = 0.7
-            out_max = 0.9
-            
-        else:
-            # Final ramp to max pressure
-            range_max = Constants.ENVELOPE_HEAVY_R
-            range_min = Constants.MIN_VK_RESISTANCE
-            curve = Constants.ENVELOPE_HEAVY_CURVE
-            out_min = 0.9
-            out_max = 1.0
-
-        # Calculate normalized position within this section
-        pos = (range_max - resistance) / (range_max - range_min)
-        
-        # Apply curve and scale to section's output range
-        curved = pow(pos, curve)
-        return out_min + (curved * (out_max - out_min))
-            
-    def check_key_activation(self, left_norm, right_norm, key_state):
-        """Implement dual-phase activation logic"""
-        max_pressure = max(left_norm, right_norm)
-        
-        if key_state.active:
-            # Key is already active - use tracking threshold
-            if max_pressure < Constants.DEACTIVATION_THRESHOLD:
-                key_state.active = False
-                return False
-            return True
-        else:
-            # Key is inactive - use initial activation threshold
-            if max_pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
-                key_state.active = True
-                return True
-            return False
-        
-    def set_l2_channel(self, channel):
-        """Set L2 multiplexer channel"""
-        for i, pin in enumerate(self.l2_select_pins):
-            pin.value = (channel >> i) & 1
-        time.sleep(0.0001)  # 100 microseconds settling time
-            
-    def read_keys(self):
-        """Read all keys with dual-phase detection"""
-        changed_keys = []
-        current_active_keys = []
-        self.key_hardware_data.clear()
-        
-        key_index = 0
-        
-        # Read first group (keys 1-5) from L2 Mux A through L1 Mux A channel 0
-        for channel in range(1, 11, 2):
-            self.set_l2_channel(channel)
-            left_value = self.l1a_mux.read_channel(0)
-            
-            self.set_l2_channel(channel + 1)
-            right_value = self.l1a_mux.read_channel(0)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read second group (keys 6-12) directly from L1 Mux A
-        for channel in range(1, 15, 2):
-            left_value = self.l1a_mux.read_channel(channel)
-            right_value = self.l1a_mux.read_channel(channel + 1)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read third group (keys 13-19) directly from L1 Mux B
-        for channel in range(1, 15, 2):
-            left_value = self.l1b_mux.read_channel(channel)
-            right_value = self.l1b_mux.read_channel(channel + 1)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        # Read final group (keys 20-25) from L2 Mux B through L1 Mux B channel 0
-        for channel in range(1, 13, 2):
-            self.set_l2_channel(channel)
-            left_value = self.l1b_mux.read_channel(0)
-            
-            self.set_l2_channel(channel + 1)
-            right_value = self.l1b_mux.read_channel(0)
-            
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-            key_index += 1
-            
-        self.active_keys = current_active_keys
-        return changed_keys
-        
-    def _process_key_reading(self, key_index, left_value, right_value, 
-                           current_active_keys, changed_keys):
-        """Process individual key readings with dual-phase detection"""
-        # Get normalized pressure values
-        left_resistance = self.adc_to_resistance(left_value)
-        right_resistance = self.adc_to_resistance(right_value)
-        left_normalized = self.normalize_resistance(left_resistance)
-        right_normalized = self.normalize_resistance(right_resistance)
-        
-        # Store hardware data
-        self.key_hardware_data[key_index] = (left_normalized, right_normalized)
-        
-        # Get key state
-        key_state = self.key_states[key_index]
-        
-        # Check activation using dual-phase logic
-        is_active = self.check_key_activation(left_normalized, right_normalized, key_state)
-        
-        if is_active:
-            current_active_keys.append(key_index)
-            
-            # Debug output (kept from original)
-            if Constants.DEBUG:
-                print(f"\nKey {key_index:02d}")
-                print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
-                print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
-        
-        # Record changes
-        if (left_normalized != key_state.left_value or 
-            right_normalized != key_state.right_value):
-            key_state.left_value = left_normalized
-            key_state.right_value = right_normalized
-            key_state.last_update = time.monotonic()
-            changed_keys.append((key_index, left_normalized, right_normalized))
-            
-    def format_key_hardware_data(self):
-        """Format hardware data for debugging"""
-        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}
-        
-    @staticmethod
-    def calculate_pitch_bend(left_pressure, right_pressure):
-        """Calculate pitch bend from pressure differential"""
-        pressure_diff = right_pressure - left_pressure
-        max_pressure = max(left_pressure, right_pressure)
-        if max_pressure == 0:
-            return 0
-        normalized_diff = pressure_diff / max_pressure
-        return max(-1, min(1, normalized_diff))  # Ensure the result is between -1 and 1
