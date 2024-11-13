@@ -49,38 +49,14 @@ class Constants:
     # Keyboard Handler Constants
     NUM_KEYS = 25
     NUM_CHANNELS = 50
-    """
-    Velostat Pressure Sensor Properties:
-    - High Resistance (≈150kΩ+): No/minimal pressure
-    - Medium Resistance (≈40-80kΩ): Light touch
-    - Low Resistance (≈1-10kΩ): Firm pressure
-    
-    MAX_VK_RESISTANCE: Upper resistance bound, readings above this normalize to 0 (no pressure)
-    MIN_VK_RESISTANCE: Lower resistance bound, readings below this normalize to 1 (max pressure)
-    
-    Normalization maps this inverse relationship:
-    - High resistance -> Low normalized value (light/no touch)
-    - Low resistance -> High normalized value (firm pressure)
-    """
-    MAX_VK_RESISTANCE = 11000  
-    MIN_VK_RESISTANCE = 500    
-    INITIAL_ACTIVATION_THRESHOLD = 0.001
-    TRACKING_THRESHOLD = 0.015
-    DEACTIVATION_THRESHOLD = 0.008
+
+    # Velostat Sensor Constants
+    MAX_VK_RESISTANCE = 11000  # Upper resistance bound
+    MIN_VK_RESISTANCE = 500    # Lower resistance bound
+    INITIAL_ACTIVATION_THRESHOLD = 0.001  # Threshold for note-on
+    DEACTIVATION_THRESHOLD = 0.008  # Threshold for note-off
     REST_VOLTAGE_THRESHOLD = 3.15
     ADC_RESISTANCE_SCALE = 3500
-
-    # Envelope Control Points (in ohms)
-    # These define the resistance values where envelope stages transition
-    ENVELOPE_LIGHT_R = 9000    # Where quick initial ramp ends
-    ENVELOPE_MID_R = 2000      # Where expressive mid-range ends 
-    ENVELOPE_HEAVY_R = 1000    # Where final ramp to max begins
-    
-    # Envelope Curve Powers
-    # These control the shape of each section (lower = more dramatic curve)
-    ENVELOPE_LIGHT_CURVE = 0.6  # Initial ramp curve (light touch)
-    ENVELOPE_MID_CURVE = 0.3    # Mid-range curve
-    ENVELOPE_HEAVY_CURVE = 0.8  # Heavy press curve
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
@@ -160,57 +136,35 @@ class PressureSensorProcessor:
         return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
         
     def normalize_resistance(self, resistance):
-        """Convert resistance to normalized pressure value with multi-stage envelope"""
+        """Convert resistance to normalized pressure value (0.0-1.0)"""
         if resistance >= Constants.MAX_VK_RESISTANCE:
             return 0
         if resistance <= Constants.MIN_VK_RESISTANCE:
             return 1
             
-        # Determine which envelope section we're in
-        if resistance >= Constants.ENVELOPE_LIGHT_R:
-            # Light touch section - quick ramp
-            range_max = Constants.MAX_VK_RESISTANCE
-            range_min = Constants.ENVELOPE_LIGHT_R
-            curve = Constants.ENVELOPE_LIGHT_CURVE
-            out_min = 0.0
-            out_max = 0.3  # Maps to start of mid range
-            
-        elif resistance >= Constants.ENVELOPE_MID_R:
-            # Mid pressure section - more gradual
-            range_max = Constants.ENVELOPE_LIGHT_R
-            range_min = Constants.ENVELOPE_MID_R
-            curve = Constants.ENVELOPE_MID_CURVE
-            out_min = 0.3
-            out_max = 0.7  # Maps to start of heavy range
-            
-        elif resistance >= Constants.ENVELOPE_HEAVY_R:
-            # Heavy pressure section - quick ramp to max
-            range_max = Constants.ENVELOPE_MID_R
-            range_min = Constants.ENVELOPE_HEAVY_R
-            curve = Constants.ENVELOPE_HEAVY_CURVE
-            out_min = 0.7
-            out_max = 0.9
-            
-        else:
-            # Final ramp to max pressure
-            range_max = Constants.ENVELOPE_HEAVY_R
-            range_min = Constants.MIN_VK_RESISTANCE
-            curve = Constants.ENVELOPE_HEAVY_CURVE
-            out_min = 0.9
-            out_max = 1.0
+        # Linear normalization between bounds
+        normalized = (Constants.MAX_VK_RESISTANCE - resistance) / (Constants.MAX_VK_RESISTANCE - Constants.MIN_VK_RESISTANCE)
+        return normalized
 
-        # Calculate normalized position within this section
-        pos = (range_max - resistance) / (range_max - range_min)
-        
-        # Apply curve and scale to section's output range
-        curved = pow(pos, curve)
-        return out_min + (curved * (out_max - out_min))
+    def calculate_position(self, left_norm, right_norm):
+        """Calculate relative position (-1.0 to 1.0) from normalized L/R values"""
+        total = left_norm + right_norm
+        if total == 0:
+            return 0
+        return (right_norm - left_norm) / total
+
+    def calculate_pressure(self, left_norm, right_norm):
+        """Calculate total pressure (0.0-1.0) from normalized L/R values"""
+        return max(left_norm, right_norm)
 
 class KeyState:
     def __init__(self):
         self.active = False
         self.left_value = 0
         self.right_value = 0
+        self.position = 0  # -1.0 to 1.0 for MPE pitch bend
+        self.pressure = 0  # 0.0 to 1.0 for MPE pressure
+        self.strike_velocity = 0  # 0.0 to 1.0 for MIDI note velocity
         self.last_update = 0
 
 class KeyStateTracker:
@@ -224,7 +178,7 @@ class KeyStateTracker:
         max_pressure = max(left_norm, right_norm)
         
         if key_state.active:
-            # Key is already active - use tracking threshold
+            # Key is already active - use deactivation threshold
             if max_pressure < Constants.DEACTIVATION_THRESHOLD:
                 key_state.active = False
                 return False
@@ -233,16 +187,22 @@ class KeyStateTracker:
             # Key is inactive - use initial activation threshold
             if max_pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
                 key_state.active = True
+                key_state.strike_velocity = max_pressure  # Capture initial velocity
                 return True
             return False
 
-    def update_key_state(self, key_index, left_normalized, right_normalized):
+    def update_key_state(self, key_index, left_normalized, right_normalized, position, pressure):
         """Update state for a single key and determine if it changed"""
         key_state = self.key_states[key_index]
         is_active = self.check_key_activation(left_normalized, right_normalized, key_state)
         
         # Store hardware data
-        self.key_hardware_data[key_index] = (left_normalized, right_normalized)
+        self.key_hardware_data[key_index] = {
+            "L": left_normalized,
+            "R": right_normalized,
+            "position": position,
+            "pressure": pressure
+        }
         
         if is_active:
             if key_index not in self.active_keys:
@@ -253,16 +213,20 @@ class KeyStateTracker:
 
         # Check if state changed
         if (left_normalized != key_state.left_value or 
-            right_normalized != key_state.right_value):
+            right_normalized != key_state.right_value or
+            position != key_state.position or
+            pressure != key_state.pressure):
             key_state.left_value = left_normalized
             key_state.right_value = right_normalized
+            key_state.position = position
+            key_state.pressure = pressure
             key_state.last_update = time.monotonic()
             return True
         return False
 
     def format_key_hardware_data(self):
         """Format hardware data for debugging"""
-        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}
+        return self.key_hardware_data
 
 class KeyboardHandler:
     def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
@@ -333,36 +297,37 @@ class KeyboardHandler:
         return changed_keys
         
     def _process_key_reading(self, key_index, left_value, right_value, changed_keys):
-        """Process individual key readings with dual-phase detection"""
-        # Get normalized pressure values
+        """Process individual key readings with MPE calculations"""
+        # Convert ADC values to normalized pressures
         left_resistance = self.pressure_processor.adc_to_resistance(left_value)
         right_resistance = self.pressure_processor.adc_to_resistance(right_value)
         left_normalized = self.pressure_processor.normalize_resistance(left_resistance)
         right_normalized = self.pressure_processor.normalize_resistance(right_resistance)
         
+        # Calculate MPE values
+        position = self.pressure_processor.calculate_position(left_normalized, right_normalized)
+        pressure = self.pressure_processor.calculate_pressure(left_normalized, right_normalized)
+        
         # Update state and check for changes
-        if self.state_tracker.update_key_state(key_index, left_normalized, right_normalized):
-            changed_keys.append((key_index, left_normalized, right_normalized))
+        if self.state_tracker.update_key_state(key_index, left_normalized, right_normalized, position, pressure):
+            key_state = self.state_tracker.key_states[key_index]
+            changed_keys.append((
+                key_index,
+                position,  # X-axis (pitch bend)
+                pressure,  # Z-axis (pressure)
+                key_state.strike_velocity if not key_state.active else None  # Initial velocity
+            ))
             
             # Debug output
             if Constants.DEBUG:
                 print(f"\nKey {key_index:02d}")
                 print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
                 print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
+                print(f"  MPE: pos={position:.3f} pressure={pressure:.3f}")
         
     def format_key_hardware_data(self):
         """Format hardware data for debugging"""
         return self.state_tracker.format_key_hardware_data()
-        
-    @staticmethod
-    def calculate_pitch_bend(left_pressure, right_pressure):
-        """Calculate pitch bend from pressure differential"""
-        pressure_diff = right_pressure - left_pressure
-        max_pressure = max(left_pressure, right_pressure)
-        if max_pressure == 0:
-            return 0
-        normalized_diff = pressure_diff / max_pressure
-        return max(-1, min(1, normalized_diff))  # Ensure the result is between -1 and 1
 
 class RotaryEncoderHandler:
     def __init__(self, octave_clk_pin, octave_dt_pin):
@@ -392,9 +357,6 @@ class RotaryEncoderHandler:
             self.last_positions[encoder_num] = 0
 
     def read_encoder(self, encoder_num):
-        events = []
-        encoder = self.encoders[0]  
-
         events = []
         encoder = self.encoders[encoder_num]
         

@@ -22,13 +22,9 @@ class Constants:
     CC_FILTER_RESONANCE = 71
     CC_RELEASE_TIME = 72
     CC_ATTACK_TIME = 73
-    CC_TIMBRE = 74             # MPE Y-axis expression (renamed from FILTER_CUTOFF)
+    CC_TIMBRE = 74             # MPE Y-axis expression
     CC_DECAY_TIME = 75
     CC_SUSTAIN_LEVEL = 76
-
-    # MIDI CC Numbers - MPE Specific
-    CC_LEFT_PRESSURE = 78       # Left sensor pressure (internal use)
-    CC_RIGHT_PRESSURE = 79      # Right sensor pressure (internal use)
     
     # MIDI RPN Messages
     RPN_MSB = 0
@@ -193,7 +189,7 @@ class CCConfigManager:
 class NoteState:
     """Memory-efficient note state tracking for CircuitPython with active state tracking"""
     __slots__ = ['key_id', 'midi_note', 'channel', 'velocity', 'timestamp', 
-                 'left_pressure', 'right_pressure', 'pitch_bend', 'timbre', 'active']
+                 'pressure', 'pitch_bend', 'timbre', 'active']
     
     def __init__(self, key_id, midi_note, channel, velocity):
         self.key_id = key_id
@@ -201,10 +197,9 @@ class NoteState:
         self.channel = channel
         self.velocity = velocity
         self.timestamp = time.monotonic()
-        self.left_pressure = 0
-        self.right_pressure = 0
+        self.pressure = 0
         self.pitch_bend = Constants.PITCH_BEND_CENTER
-        self.timbre = Constants.TIMBRE_CENTER  # Y-axis expression
+        self.timbre = Constants.TIMBRE_CENTER
         self.active = True
 
 class MPEChannelManager:
@@ -215,10 +210,6 @@ class MPEChannelManager:
             Constants.MPE_ZONE_START, 
             Constants.MPE_ZONE_END + 1
         ))
-        # Manager Channel state
-        self.manager_pitch_bend = Constants.PITCH_BEND_CENTER
-        self.manager_pressure = 0
-        self.manager_timbre = Constants.TIMBRE_CENTER
 
     def allocate_channel(self, key_id):
         if key_id in self.active_notes and self.active_notes[key_id].active:
@@ -270,29 +261,28 @@ class MPENoteProcessor:
     def process_key_changes(self, changed_keys, config):
         midi_events = []
         
-        for key_id, left, right in changed_keys:
-            avg_pressure = (left + right) / 2
+        for key_id, position, pressure, strike_velocity in changed_keys:
             note_state = self.channel_manager.get_note_state(key_id)
             
-            if avg_pressure > 0.01:  # Key is active
+            if pressure > 0.01:  # Key is active
                 midi_note = self.base_root_note + self.octave_shift * 12 + key_id
                 
                 if not note_state:  # New note
-                    velocity = int(avg_pressure * 127)
+                    velocity = int(strike_velocity * 127) if strike_velocity is not None else int(pressure * 127)
                     # Proper MPE order: CC74 → Pressure → Pitch Bend → Note On
                     midi_events.extend([
                         ('timbre_init', key_id),           # Y-axis
-                        ('pressure_init', key_id, avg_pressure),  # Z-axis
-                        ('pitch_bend_init', key_id, left, right), # X-axis
+                        ('pressure_init', key_id, pressure),  # Z-axis
+                        ('pitch_bend_init', key_id, position),  # X-axis
                         ('note_on', midi_note, velocity, key_id)
                     ])
                     self.active_notes.add(key_id)
                 
                 elif note_state.active:
                     midi_events.extend([
-                        ('timbre_update', key_id, left, right),
-                        ('pressure_update', key_id, avg_pressure),
-                        ('pitch_bend_update', key_id, left, right)
+                        ('timbre_update', key_id, position),  # Using position for timbre calculation
+                        ('pressure_update', key_id, pressure),
+                        ('pitch_bend_update', key_id, position)
                     ])
                 
             else:  # Key released
@@ -317,25 +307,22 @@ class MPENoteProcessor:
                 old_note = note_state.midi_note
                 new_note = self.base_root_note + self.octave_shift * 12 + note_state.key_id
                 
+                # Use stored values from note_state
+                position = (note_state.pitch_bend - Constants.PITCH_BEND_CENTER) / (Constants.PITCH_BEND_MAX / 2)
+                
                 midi_events.extend([
                     ('timbre_init', note_state.key_id),
-                    ('pressure_init', note_state.key_id, 
-                     (note_state.left_pressure + note_state.right_pressure) / 2),
-                    ('pitch_bend_init', note_state.key_id, 
-                     note_state.left_pressure, note_state.right_pressure),
+                    ('pressure_init', note_state.key_id, note_state.pressure),
+                    ('pitch_bend_init', note_state.key_id, position),
                     ('note_off', old_note, 0, note_state.key_id),
                     ('note_on', new_note, note_state.velocity, note_state.key_id)
                 ])
                 
-                if note_state.active and (note_state.left_pressure > 0 or 
-                                        note_state.right_pressure > 0):
-                    avg_pressure = (note_state.left_pressure + note_state.right_pressure) / 2
+                if note_state.active and note_state.pressure > 0:
                     midi_events.extend([
-                        ('timbre_update', note_state.key_id, 
-                         note_state.left_pressure, note_state.right_pressure),
-                        ('pressure_update', note_state.key_id, avg_pressure),
-                        ('pitch_bend_update', note_state.key_id,
-                         note_state.left_pressure, note_state.right_pressure)
+                        ('timbre_update', note_state.key_id, position),
+                        ('pressure_update', note_state.key_id, note_state.pressure),
+                        ('pitch_bend_update', note_state.key_id, position)
                     ])
             
         return midi_events
@@ -477,11 +464,11 @@ class MidiEventRouter:
         channel = self.channel_manager.allocate_channel(key_id)
         self.message_sender.send_message([0xB0 | channel, Constants.CC_TIMBRE, Constants.TIMBRE_CENTER])
 
-    def _handle_timbre_update(self, key_id, left, right):
+    def _handle_timbre_update(self, key_id, position):
         note_state = self.channel_manager.get_note_state(key_id)
         if note_state:
-            diff = abs(right - left)
-            timbre_value = int(diff * 127)
+            # Map position (-1 to 1) to timbre range (0 to 127)
+            timbre_value = int((position + 1) * 63.5)
             self.message_sender.send_message([0xB0 | note_state.channel, Constants.CC_TIMBRE, timbre_value])
             note_state.timbre = timbre_value
 
@@ -495,18 +482,19 @@ class MidiEventRouter:
         if note_state:
             pressure_value = int(pressure * 127)
             self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
+            note_state.pressure = pressure
 
-    def _handle_pitch_bend_init(self, key_id, left, right):
+    def _handle_pitch_bend_init(self, key_id, position):
         channel = self.channel_manager.allocate_channel(key_id)
-        bend_value = self._calculate_pitch_bend(left, right)
+        bend_value = self._calculate_pitch_bend(position)
         lsb = bend_value & 0x7F
         msb = (bend_value >> 7) & 0x7F
         self.message_sender.send_message([0xE0 | channel, lsb, msb])
 
-    def _handle_pitch_bend_update(self, key_id, left, right):
+    def _handle_pitch_bend_update(self, key_id, position):
         note_state = self.channel_manager.get_note_state(key_id)
         if note_state:
-            bend_value = self._calculate_pitch_bend(left, right)
+            bend_value = self._calculate_pitch_bend(position)
             lsb = bend_value & 0x7F
             msb = (bend_value >> 7) & 0x7F
             self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
@@ -526,10 +514,9 @@ class MidiEventRouter:
     def _handle_control_change(self, cc_number, midi_value):
         self.message_sender.send_message([0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value])
 
-    def _calculate_pitch_bend(self, left, right):
-        """Calculate pitch bend value from left/right pressure differential"""
-        diff = right - left  # Range: -1 to 1
-        normalized = (diff + 1) / 2  # Range: 0 to 1
+    def _calculate_pitch_bend(self, position):
+        """Calculate pitch bend value from position (-1 to 1)"""
+        normalized = (position + 1) / 2  # Convert -1 to 1 range to 0 to 1
         return int(normalized * Constants.PITCH_BEND_MAX)
 
 class MidiLogic:
