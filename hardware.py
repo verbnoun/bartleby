@@ -48,7 +48,6 @@ class Constants:
     
     # Keyboard Handler Constants
     NUM_KEYS = 25
-    NUM_CHANNELS = 50
     """
     Velostat Pressure Sensor Properties:
     - High Resistance (≈150kΩ+): No/minimal pressure
@@ -69,6 +68,15 @@ class Constants:
     DEACTIVATION_THRESHOLD = 0.008
     REST_VOLTAGE_THRESHOLD = 3.15
     ADC_RESISTANCE_SCALE = 3500
+
+    # Key Detection
+    ACTIVATION_THRESHOLD = 0.02    # Initial key activation
+    RELEASE_THRESHOLD = 0.01       # Key release detection
+    
+    # Processing
+    POSITION_CENTER_WEIGHT = 0.3   # Position curve shaping
+    PRESSURE_CURVE = 0.5          # Pressure response curve
+    STRIKE_SCALING = 1.2          # Strike velocity scaling
 
     # Envelope Control Points (in ohms)
     # These define the resistance values where envelope stages transition
@@ -230,96 +238,137 @@ class KeyState:
         self.right_value = 0
         self.last_update = 0
 
+import time
+import digitalio
+import analogio
+
 class KeyMultiplexer:
-    def __init__(self, sig_a_pin, sig_b_pin, l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin, 
+    """Handles multiplexer bank switching and key pair reading with timing diagnostics"""
+    
+    # Bank identifiers (in scan order)
+    BANK_L2A = 0  # Keys 0-4
+    BANK_L1A = 1  # Keys 5-11
+    BANK_L1B = 2  # Keys 12-18
+    BANK_L2B = 3  # Keys 19-24
+    
+    def __init__(self, sig_a_pin, sig_b_pin, 
+                 l1a_s0_pin, l1a_s1_pin, l1a_s2_pin, l1a_s3_pin,
+                 l1b_s0_pin, l1b_s1_pin, l1b_s2_pin, l1b_s3_pin,
                  l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
-        """Initialize keyboard multiplexer with shared control pins for both banks"""
-        # Initialize the L1 signal pins
+                 
+        # Initialize signal pins
         self.sig_a = analogio.AnalogIn(sig_a_pin)
         self.sig_b = analogio.AnalogIn(sig_b_pin)
-        self.current_bank = 'a'  # Track which bank we're reading
         
-        # Initialize L1 control pins (shared between banks)
-        self.l1_select_pins = [
-            digitalio.DigitalInOut(pin) for pin in (l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin)
-        ]
-        for pin in self.l1_select_pins:
-            pin.direction = digitalio.Direction.OUTPUT
-            pin.value = False
-
-        # Initialize L2 select pins (shared between banks)
-        self.l2_select_pins = [
-            digitalio.DigitalInOut(pin) for pin in (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
-        ]
-        for pin in self.l2_select_pins:
-            pin.direction = digitalio.Direction.OUTPUT
-            pin.value = False
-
-        # Define scanning configurations
-        self.l2a_active_channels = 10  # Channels 1-10 for keys 0-4
-        self.l2b_active_channels = 14  # Channels 1-14 for keys 18-24
-        self.l1_direct_channels = 14   # Channels 1-14 for direct connections
-        self.settling_time = 0.001     # 1ms settling time
-
-    def select_bank(self, bank):
-        """Select which bank to read from (a or b)"""
-        self.current_bank = bank
-
-    def set_l1_channel(self, channel):
-        """Set Level 1 multiplexer channel (0-15)"""
-        if 0 <= channel < 16:
-            for i, pin in enumerate(self.l1_select_pins):
-                pin.value = bool((channel >> i) & 1)
-            time.sleep(self.settling_time)
-
-    def set_l2_channel(self, channel):
-        """Set Level 2 multiplexer channel (0-15)"""
-        if 0 <= channel < 16:
-            for i, pin in enumerate(self.l2_select_pins):
-                pin.value = bool((channel >> i) & 1)
-            time.sleep(self.settling_time)
-
-    def read_current_channel(self):
-        """Read the currently selected channel's value from current bank"""
-        return self.sig_a.value if self.current_bank == 'a' else self.sig_b.value
-
-    def scan_all_channels(self, bank):
-        """Scan all valid channel combinations for specified bank and return raw readings"""
-        readings = []
-        self.select_bank(bank)
+        # Initialize all pins in one loop
+        self.select_pins = {}
+        for name, pins in {
+            'L1A': (l1a_s0_pin, l1a_s1_pin, l1a_s2_pin, l1a_s3_pin),
+            'L1B': (l1b_s0_pin, l1b_s1_pin, l1b_s2_pin, l1b_s3_pin),
+            'L2': (l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin)
+        }.items():
+            self.select_pins[name] = []
+            for pin in pins:
+                io = digitalio.DigitalInOut(pin)
+                io.direction = digitalio.Direction.OUTPUT
+                io.value = False
+                self.select_pins[name].append(io)
         
-        if bank == 'a':
-            # First read L2A channels through L1A channel 0
-            self.set_l1_channel(0)  # Select L2A input
-            for channel in range(1, self.l2a_active_channels + 1):
-                self.set_l2_channel(channel)
-                readings.append(self.read_current_channel())
+        # Track current state
+        self.current_bank = None
+        self.current_channel = None
+        self.pin_states = {
+            'L1A': [False] * 4,
+            'L1B': [False] * 4,
+            'L2': [False] * 4
+        }
+        
+        # Bank configuration lookup
+        self.bank_config = {
+            self.BANK_L2A: ('L2', 'sig_a', (1, 5)),    # Keys 0-4:  channels 1-10
+            self.BANK_L1A: ('L1A', 'sig_a', (1, 7)),   # Keys 5-11: channels 1-14
+            self.BANK_L1B: ('L1B', 'sig_b', (1, 7)),   # Keys 12-18: channels 1-14
+            self.BANK_L2B: ('L2', 'sig_b', (1, 6))     # Keys 19-24: channels 1-12
+        }
+        
+        # Buffer for last read values
+        self.last_values = {}
+        
+    def _set_channel_pins(self, pin_group, channel):
+        """Set a group of select pins to represent a channel number"""
+        if Constants.DEBUG:
+            start_time = time.monotonic()
             
-            # Then read L1A direct channels
-            for channel in range(1, self.l1_direct_channels + 1):
-                self.set_l1_channel(channel)
-                readings.append(self.read_current_channel())
+        # Calculate new pin states
+        new_states = [bool((channel >> i) & 1) for i in range(4)]
+        group_key = 'L1A' if pin_group == self.select_pins['L1A'] else 'L1B' if pin_group == self.select_pins['L1B'] else 'L2'
+        
+        # Only update pins that changed
+        if new_states != self.pin_states[group_key]:
+            for i, (pin, new_state) in enumerate(zip(pin_group, new_states)):
+                if new_state != self.pin_states[group_key][i]:
+                    pin.value = new_state
+            self.pin_states[group_key] = new_states
+
+        if Constants.DEBUG:
+            print(f"[timing] Pin set time: {(time.monotonic() - start_time)*1000:.3f}ms")
+            
+    def read_bank(self, bank):
+        """Read all key pairs in a bank sequentially"""
+        if Constants.DEBUG:
+            start_time = time.monotonic()
+            
+        # Get bank configuration
+        pin_group_name, sig_name, (start_ch, num_pairs) = self.bank_config[bank]
+        sig_pin = self.sig_a if sig_name == 'sig_a' else self.sig_b
+        pin_group = self.select_pins[pin_group_name]
+        
+        # Switch bank if needed
+        if bank != self.current_bank:
+            if Constants.DEBUG:
+                switch_start = time.monotonic()
                 
-        else:  # bank == 'b'
-            # First read L2B channels through L1B channel 0
-            self.set_l1_channel(0)  # Select L2B input
-            for channel in range(1, self.l2b_active_channels + 1):
-                self.set_l2_channel(channel)
-                readings.append(self.read_current_channel())
+            # Reset only if actually switching
+            for group in self.select_pins.values():
+                for pin in group:
+                    pin.value = False
+            for group in self.pin_states:
+                self.pin_states[group] = [False] * 4
+            self.current_bank = bank
+            self.current_channel = None
             
-            # Then read L1B direct channels
-            for channel in range(1, self.l1_direct_channels + 1):
-                self.set_l1_channel(channel)
-                readings.append(self.read_current_channel())
-
+            if Constants.DEBUG:
+                switch_time = time.monotonic() - switch_start
+                print(f"[timing] Bank switch to {bank} took: {switch_time*1000:.3f}ms")
+                print(f"[timing] Time since last switch: {(switch_start - start_time)*1000:.3f}ms")
+        
+        readings = []
+        # Read each channel pair
+        for pair_idx in range(num_pairs):
+            left_ch = start_ch + (pair_idx * 2)
+            right_ch = left_ch + 1
+            read_time = time.monotonic()
+            
+            # Set and read left channel
+            self._set_channel_pins(pin_group, left_ch)
+            left_value = sig_pin.value
+            
+            # Set and read right channel
+            self._set_channel_pins(pin_group, right_ch)
+            right_value = sig_pin.value
+            
+            if Constants.DEBUG:
+                print(f"[timing] Key pair read at bank {bank} channel {left_ch}")
+                print(f"[timing] Read time: {(time.monotonic() - read_time)*1000:.3f}ms")
+                print(f"[values] Left: {left_value}, Right: {right_value}")
+                
+            readings.append((left_value, right_value, read_time))
+            
+        if Constants.DEBUG:
+            scan_time = time.monotonic() - start_time
+            print(f"[timing] Bank {bank} scan ({num_pairs} pairs) took: {scan_time*1000:.3f}ms")
+            
         return readings
-
-    def cleanup(self):
-        """Clean up GPIO pins"""
-        self.sig_a.deinit()
-        self.sig_b.deinit()
-        for pin in self.l1_select_pins + self.l2_select_pins:
-            pin.deinit()
 
 class KeyDataProcessor:
     """Handles conversion of physical measurements to musical expression"""
@@ -409,161 +458,168 @@ class KeyDataProcessor:
         return max(-1, min(1, normalized_diff))
     
 class KeyState:
-    """Tracks the physical state of a single key"""
+    """Represents the physical state of a key with normalized values"""
     # State definitions
-    INACTIVE = 0
-    INITIAL_TOUCH = 1
-    ACTIVE = 2
-    RELEASE_PENDING = 3
-    RELEASED = 4
+    INACTIVE = 'inactive'
+    INITIAL_CONTACT = 'contact'
+    ACTIVE = 'active' 
+    RELEASE = 'release'
 
     def __init__(self):
         self.state = self.INACTIVE
-        self.left_resistance = float('inf')
-        self.right_resistance = float('inf')
+        self.values = {
+            'pressure': 0.0,   # Overall pressure (0.0-1.0)
+            'position': 0.0,   # Left/right position (-1.0 to 1.0)
+            'strike': 0.0      # Initial strike velocity (0.0-1.0)
+        }
         self.last_update = 0
         
 class KeyboardHandler:
-    def __init__(self, keyboard_mux, data_processor):
-        """Initialize keyboard handler with multiplexer and data processor"""
-        self.mux = keyboard_mux
-        self.data_processor = data_processor
+    """Handles keyboard scanning and key state management with timing diagnostics"""
+    
+    def __init__(self, key_multiplexer, data_processor):
+        self.multiplexer = key_multiplexer
+        self.processor = data_processor
         self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
-        self.active_keys = []
-        self.key_hardware_data = {}
+        
+        # Mapping of banks to key indices
+        self.bank_key_map = {
+            KeyMultiplexer.BANK_L2A: (0, 5),    # Keys 0-4
+            KeyMultiplexer.BANK_L1A: (5, 12),   # Keys 5-11
+            KeyMultiplexer.BANK_L1B: (12, 19),  # Keys 12-18
+            KeyMultiplexer.BANK_L2B: (19, 25)   # Keys 19-24
+        }
+        
+        # State buffers to reduce processing
+        self.pressure_buffer = [0.0] * Constants.NUM_KEYS
+        self.position_buffer = [0.0] * Constants.NUM_KEYS
+        self.last_event_time = [0.0] * Constants.NUM_KEYS
         
     def read_keys(self):
-        """Read all keys and process their states"""
-        changed_keys = []
-        current_active_keys = []
-        self.key_hardware_data.clear()
+        """Read all keys and generate events for changes"""
+        events = []
         
-        # Get raw readings from both banks
-        readings_a = self.mux.scan_all_channels('a')
-        readings_b = self.mux.scan_all_channels('b')
+        if Constants.DEBUG:
+            scan_start = time.monotonic()
+            print(f"\n[scan] Starting full keyboard scan at {scan_start:.2f}")
         
-        # Process keys 0-4 (through L2A, first 10 readings from bank A in pairs)
-        for i in range(0, 10, 2):
-            key_index = i // 2
-            left_value = readings_a[i]
-            right_value = readings_a[i + 1]
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-
-        # Process keys 5-11 (direct on L1A, next 14 readings from bank A in pairs)
-        l1a_base_idx = 10
-        for i in range(0, 14, 2):
-            key_index = 5 + (i // 2)
-            left_value = readings_a[l1a_base_idx + i]
-            right_value = readings_a[l1a_base_idx + i + 1]
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-
-        # Process keys 12-17 (direct on L1B, first 14 readings from bank B in pairs)
-        l1b_direct_readings = readings_b[14:]
-        for i in range(0, 14, 2):
-            key_index = 12 + (i // 2)
-            left_value = l1b_direct_readings[i]
-            right_value = l1b_direct_readings[i + 1]
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
-
-        # Process keys 18-24 (through L2B, first 14 readings from bank B in pairs)
-        l2b_readings = readings_b[:14]
-        for i in range(0, 14, 2):
-            key_index = 18 + (i // 2)
-            left_value = l2b_readings[i]
-            right_value = l2b_readings[i + 1]
-            self._process_key_reading(key_index, left_value, right_value, 
-                                   current_active_keys, changed_keys)
+        # Scan banks in optimized order
+        for bank in [KeyMultiplexer.BANK_L2A, KeyMultiplexer.BANK_L1A, 
+                    KeyMultiplexer.BANK_L1B, KeyMultiplexer.BANK_L2B]:
+            start_idx, end_idx = self.bank_key_map[bank]
+            readings = self.multiplexer.read_bank(bank)
             
-        self.active_keys = current_active_keys
-        return changed_keys
-
-    def _process_key_reading(self, key_index, left_adc, right_adc, 
-                           current_active_keys, changed_keys):
-        """Process individual key readings and manage state transitions"""
-        # Convert ADC to resistance
-        left_resistance = self._adc_to_resistance(left_adc)
-        right_resistance = self._adc_to_resistance(right_adc)
+            # Process each key pair's readings
+            for pair_idx, (left_raw, right_raw, read_time) in enumerate(readings):
+                key_idx = start_idx + pair_idx
+                if key_idx >= end_idx:
+                    continue
+                    
+                # Convert ADC values
+                left_r = self._adc_to_resistance(left_raw)
+                right_r = self._adc_to_resistance(right_raw)
+                
+                # Process sensor data
+                process_start = time.monotonic()
+                key_data = self.processor.process_key_data(
+                    left_r, right_r,
+                    self.key_states[key_idx]
+                )
+                
+                if Constants.DEBUG:
+                    process_time = time.monotonic() - process_start
+                    print(f"[timing] Key {key_idx} processing took: {process_time*1000:.3f}ms")
+                    print(f"[timing] Total key latency: {(process_time - read_time)*1000:.3f}ms")
+                
+                # Check for state changes using buffers
+                new_events = self._process_key_state(
+                    key_idx, 
+                    key_data,
+                    read_time,
+                    process_start
+                )
+                events.extend(new_events)
+                
+        if Constants.DEBUG:
+            total_scan_time = time.monotonic() - scan_start
+            print(f"[scan] Complete keyboard scan took: {total_scan_time*1000:.3f}ms")
+            if events:
+                print(f"[events] Generated {len(events)} events")
+                
+        return events
         
-        key_state = self.key_states[key_index]
+    def _process_key_state(self, key_idx, key_data, read_time, process_time):
+        """Process key state changes using buffered values"""
+        events = []
+        key_state = self.key_states[key_idx]
         
-        # Determine if electrical values have changed
-        values_changed = (
-            left_resistance != key_state.left_resistance or 
-            right_resistance != key_state.right_resistance
-        )
+        # Check pressure change against buffer
+        pressure_change = abs(key_data['pressure'] - self.pressure_buffer[key_idx])
+        position_change = abs(key_data['pitch_bend'] - self.position_buffer[key_idx])
         
-        # Get processed pressure values from data processor
-        processed_data = self.data_processor.process_key_data(
-            left_resistance, right_resistance, key_state.state
-        )
-        
-        # Handle state transitions
-        new_state = self._update_key_state(
-            key_state, processed_data['pressure'], processed_data['velocity']
-        )
-        
-        # Store hardware data for debugging
-        self.key_hardware_data[key_index] = (left_resistance, right_resistance)
-        
-        # Track active keys
-        if new_state in (KeyState.ACTIVE, KeyState.INITIAL_TOUCH):
-            current_active_keys.append(key_index)
+        # State machine with buffered values
+        if key_state.state == KeyState.INACTIVE:
+            if key_data['pressure'] > Constants.ACTIVATION_THRESHOLD:
+                if Constants.DEBUG:
+                    print(f"[state] Key {key_idx} activated")
+                    print(f"[timing] Activation latency: {(process_time - read_time)*1000:.3f}ms")
+                    
+                events.append((key_idx, KeyState.INITIAL_CONTACT, {
+                    'strike': key_data['velocity'] / 127.0,
+                    'detection_time': read_time,
+                    'process_time': process_time
+                }))
+                key_state.state = KeyState.INITIAL_CONTACT
+                
+        elif key_state.state == KeyState.INITIAL_CONTACT:
+            if key_data['pressure'] < Constants.RELEASE_THRESHOLD:
+                key_state.state = KeyState.INACTIVE
+            else:
+                key_state.state = KeyState.ACTIVE
+                events.append((key_idx, KeyState.ACTIVE, {
+                    'pressure': key_data['pressure'],
+                    'position': key_data['pitch_bend'],
+                    'detection_time': read_time,
+                    'process_time': process_time
+                }))
+                
+        elif key_state.state == KeyState.ACTIVE:
+            if key_data['pressure'] < Constants.RELEASE_THRESHOLD:
+                if Constants.DEBUG:
+                    print(f"[state] Key {key_idx} released")
+                    print(f"[timing] Release latency: {(process_time - read_time)*1000:.3f}ms")
+                    
+                key_state.state = KeyState.RELEASE
+                events.append((key_idx, KeyState.RELEASE, {
+                    'pressure': 0.0,
+                    'detection_time': read_time,
+                    'process_time': process_time
+                }))
+            elif pressure_change > 0.01 or position_change > 0.01:
+                if Constants.DEBUG:
+                    print(f"[state] Key {key_idx} pressure/position update")
+                    print(f"[timing] Update latency: {(process_time - read_time)*1000:.3f}ms")
+                    
+                events.append((key_idx, KeyState.ACTIVE, {
+                    'pressure': key_data['pressure'],
+                    'position': key_data['pitch_bend'],
+                    'detection_time': read_time,
+                    'process_time': process_time
+                }))
+                
+        elif key_state.state == KeyState.RELEASE:
+            key_state.state = KeyState.INACTIVE
             
-            # Debug output
-            if Constants.DEBUG:
-                print(f"\nKey {key_index:02d}")
-                print(f"  L: ADC={left_adc:5d} → R={left_resistance:8.1f}Ω")
-                print(f"  R: ADC={right_adc:5d} → R={right_resistance:8.1f}Ω")
-        
-        # Record state changes
-        if values_changed or new_state != key_state.state:
-            key_state.left_resistance = left_resistance
-            key_state.right_resistance = right_resistance
-            key_state.state = new_state
-            key_state.last_update = time.monotonic()
-            changed_keys.append((key_index, processed_data['pressure'], 
-                               processed_data['pitch_bend']))
-    
-    def _update_key_state(self, key_state, pressure, velocity):
-        """Handle state machine transitions"""
-        current_state = key_state.state
-        
-        if current_state == KeyState.INACTIVE:
-            if pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
-                return KeyState.INITIAL_TOUCH
-                
-        elif current_state == KeyState.INITIAL_TOUCH:
-            if pressure < Constants.DEACTIVATION_THRESHOLD:
-                return KeyState.INACTIVE
-            return KeyState.ACTIVE
-                
-        elif current_state == KeyState.ACTIVE:
-            if pressure < Constants.TRACKING_THRESHOLD:
-                return KeyState.RELEASE_PENDING
-                
-        elif current_state == KeyState.RELEASE_PENDING:
-            if pressure > Constants.TRACKING_THRESHOLD:
-                return KeyState.ACTIVE
-            elif pressure < Constants.DEACTIVATION_THRESHOLD:
-                return KeyState.RELEASED
-                
-        elif current_state == KeyState.RELEASED:
-            if pressure < Constants.DEACTIVATION_THRESHOLD:
-                return KeyState.INACTIVE
-            return KeyState.ACTIVE
+        # Update buffers
+        self.pressure_buffer[key_idx] = key_data['pressure']
+        self.position_buffer[key_idx] = key_data['pitch_bend']
+        self.last_event_time[key_idx] = process_time
             
-        return current_state
-    
+        return events
+        
     def _adc_to_resistance(self, adc_value):
         """Convert ADC reading to resistance value"""
         voltage = (adc_value / Constants.ADC_MAX) * 3.3
         if voltage >= Constants.REST_VOLTAGE_THRESHOLD:
             return float('inf')
         return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
-
-    def format_key_hardware_data(self):
-        """Format hardware data for debugging"""
-        return {k: {"L": v[0], "R": v[1]} for k, v in self.key_hardware_data.items()}

@@ -8,8 +8,8 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    DEBUG = True
-    SEE_HEARTBEAT = False
+    DEBUG = False
+    SEE_HEARTBEAT = True
 
     # Hardware Setup Delay
     SETUP_DELAY = 0.1
@@ -81,17 +81,26 @@ class Bartleby:
         time.sleep(Constants.SETUP_DELAY)  # Allow hardware to stabilize
 
     def _setup_keyboard(self):
-        """Initialize keyboard multiplexer and handler with shared control pins"""
+        """Initialize keyboard multiplexer and handler with proper pin configuration"""
+        # Create single keyboard multiplexer with all pins
         keyboard_mux = KeyMultiplexer(
-            # Signal pins for both banks
+            # Signal pins
             sig_a_pin=HWConstants.KEYBOARD_L1A_MUX_SIG,
             sig_b_pin=HWConstants.KEYBOARD_L1B_MUX_SIG,
-            # Shared L1 control pins (using L1A pins)
-            l1_s0_pin=HWConstants.KEYBOARD_L1A_MUX_S0,
-            l1_s1_pin=HWConstants.KEYBOARD_L1A_MUX_S1,
-            l1_s2_pin=HWConstants.KEYBOARD_L1A_MUX_S2,
-            l1_s3_pin=HWConstants.KEYBOARD_L1A_MUX_S3,
-            # Shared L2 control pins
+            
+            # L1A control pins
+            l1a_s0_pin=HWConstants.KEYBOARD_L1A_MUX_S0,
+            l1a_s1_pin=HWConstants.KEYBOARD_L1A_MUX_S1,
+            l1a_s2_pin=HWConstants.KEYBOARD_L1A_MUX_S2,
+            l1a_s3_pin=HWConstants.KEYBOARD_L1A_MUX_S3,
+            
+            # L1B control pins
+            l1b_s0_pin=HWConstants.KEYBOARD_L1B_MUX_S0,
+            l1b_s1_pin=HWConstants.KEYBOARD_L1B_MUX_S1,
+            l1b_s2_pin=HWConstants.KEYBOARD_L1B_MUX_S2,
+            l1b_s3_pin=HWConstants.KEYBOARD_L1B_MUX_S3,
+            
+            # L2 shared control pins
             l2_s0_pin=HWConstants.KEYBOARD_L2_MUX_S0,
             l2_s1_pin=HWConstants.KEYBOARD_L2_MUX_S1,
             l2_s2_pin=HWConstants.KEYBOARD_L2_MUX_S2,
@@ -101,6 +110,7 @@ class Bartleby:
         # Create the data processor
         data_processor = KeyDataProcessor()
         
+        # Create keyboard handler with multiplexer and processor
         return KeyboardHandler(keyboard_mux, data_processor)
 
     def _setup_midi(self):
@@ -183,6 +193,20 @@ class Bartleby:
                 self._handle_encoder_events(changes['encoders'])
             self.last_encoder_scan = self.current_time
             
+        if self.midi.check_for_messages() == "hello":  # Specific check for hello message
+            if not self.candide_connected:
+                print("Candide software connection established")
+                self.candide_connected = True
+                if not self.has_greeted:
+                    self.midi.welcome.play_connection_greeting()
+                    self.has_greeted = True
+            self.last_candide_message = time.monotonic()
+        elif self.midi.check_for_messages():  # Any other message
+            if not self.candide_connected:
+                print("Candide software connection established")
+                self.candide_connected = True
+            self.last_candide_message = time.monotonic()
+        
         return changes
 
     def update(self):
