@@ -5,11 +5,10 @@ from collections import deque
 
 class Constants:
     DEBUG = False
-    
+    SEE_HEARTBEAT = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
-    SEE_HEARTBEAT = False
     
     # MPE Configuration
     MPE_MASTER_CHANNEL = 0      # MIDI channel 1 (zero-based)
@@ -66,7 +65,8 @@ class Constants:
 class MidiTransportManager:
     """Manages both UART and USB MIDI output streams"""
     def __init__(self, tx_pin, rx_pin, midi_callback=None):
-        print(f"Initializing MIDI Transport Manager")
+        if Constants.DEBUG:
+            print("Initializing MIDI Transport Manager")
         self.midi_callback = midi_callback
         self._setup_uart(tx_pin, rx_pin)
         self._setup_usb()
@@ -83,18 +83,20 @@ class MidiTransportManager:
                 stop=1,
                 timeout=Constants.UART_TIMEOUT
             )
-            print("UART MIDI initialized")
+            if Constants.DEBUG:
+                print(f"UART MIDI initialized on TX:{tx_pin}, RX:{rx_pin}")
         except Exception as e:
-            print(f"UART initialization error: {str(e)}")
+            print(f"UART initialization error on pins TX:{tx_pin}, RX:{rx_pin} - {str(e)}")
             raise
 
     def _setup_usb(self):
         """Initialize USB MIDI output"""
         try:
             self.usb_midi = usb_midi.ports[1]
-            print("USB MIDI initialized")
+            if Constants.DEBUG:
+                print("USB MIDI initialized on port 1")
         except Exception as e:
-            print(f"USB MIDI initialization error: {str(e)}")
+            print(f"USB MIDI initialization error on port 1 - {str(e)}")
             raise
 
     def send_message(self, message):
@@ -104,7 +106,7 @@ class MidiTransportManager:
             self.usb_midi.write(bytes(message))
         except Exception as e:
             if str(e):
-                print(f"Error sending MIDI: {str(e)}")
+                print(f"Error sending MIDI message {message.hex() if hasattr(message, 'hex') else message}: {str(e)}")
 
     def check_for_messages(self):
         """Check for incoming MIDI messages on UART"""
@@ -122,7 +124,7 @@ class MidiTransportManager:
                         elif Constants.DEBUG:
                             if message.strip() == "♡":
                                 if Constants.SEE_HEARTBEAT:
-                                    print(f"Cart {message}")
+                                    print("Heartbeat received")
                             else:
                                 print(f"Received message: {message}")
                         return True
@@ -139,10 +141,11 @@ class MidiTransportManager:
         """Clean shutdown of MIDI transport"""
         try:
             self.uart.deinit()
-            print("MIDI transport cleaned up")
+            if Constants.DEBUG:
+                print("MIDI transport cleaned up successfully")
         except Exception as e:
             if str(e):
-                print(f"Error during cleanup: {str(e)}")
+                print(f"Error during MIDI transport cleanup: {str(e)}")
 
 class CCConfigManager:
     """Manages CC assignments and configuration for pots"""
@@ -216,20 +219,29 @@ class MPEChannelManager:
             return self.active_notes[key_id].channel
 
         if self.available_channels:
-            return self.available_channels.pop(0)
+            channel = self.available_channels.pop(0)
+            if Constants.DEBUG:
+                print(f"Allocated channel {channel} for key {key_id}")
+            return channel
             
         if len(self.note_queue):
             oldest_key_id = self.note_queue.popleft()
             channel = self.active_notes[oldest_key_id].channel
+            if Constants.DEBUG:
+                print(f"Note stealing: Released channel {channel} from key {oldest_key_id} for new key {key_id}")
             self._release_note(oldest_key_id)
             return channel
             
+        if Constants.DEBUG:
+            print(f"No channels available, defaulting to first MPE channel for key {key_id}")
         return Constants.MPE_ZONE_START
 
     def add_note(self, key_id, midi_note, channel, velocity):
         note_state = NoteState(key_id, midi_note, channel, velocity)
         self.active_notes[key_id] = note_state
         self.note_queue.append(key_id)
+        if Constants.DEBUG:
+            print(f"Added note: key={key_id}, note={midi_note}, channel={channel}, velocity={velocity}")
         return note_state
 
     def _release_note(self, key_id):
@@ -239,6 +251,8 @@ class MPEChannelManager:
             channel = note_state.channel
             if channel not in self.available_channels:
                 self.available_channels.append(channel)
+                if Constants.DEBUG:
+                    print(f"Released channel {channel} from key {key_id}")
 
     def release_note(self, key_id):
         self._release_note(key_id)
@@ -277,6 +291,8 @@ class MPENoteProcessor:
                         ('note_on', midi_note, velocity, key_id)
                     ])
                     self.active_notes.add(key_id)
+                    if Constants.DEBUG:
+                        print(f"New note: key={key_id}, note={midi_note}, velocity={velocity}")
                 
                 elif note_state.active:
                     midi_events.extend([
@@ -293,6 +309,8 @@ class MPENoteProcessor:
                         ('note_off', midi_note, 0, key_id)
                     ])
                     self.active_notes.remove(key_id)
+                    if Constants.DEBUG:
+                        print(f"Note off: key={key_id}, note={midi_note}")
 
         return midi_events
 
@@ -301,6 +319,8 @@ class MPENoteProcessor:
         new_octave = max(-2, min(2, self.octave_shift + direction))
         
         if new_octave != self.octave_shift:
+            if Constants.DEBUG:
+                print(f"Octave shift: {self.octave_shift} -> {new_octave}")
             self.octave_shift = new_octave
             
             for note_state in self.channel_manager.get_active_notes():
@@ -339,6 +359,8 @@ class MidiControlProcessor:
             cc_number = self.cc_config.get_cc_for_pot(pot_index)
             midi_value = int(new_value * 127)
             midi_events.append(('control_change', cc_number, midi_value))
+            if Constants.DEBUG:
+                print(f"Pot {pot_index} changed: CC{cc_number}={midi_value}")
         return midi_events
 
     def handle_config_message(self, message):
@@ -356,6 +378,9 @@ class MPEConfigurator:
 
     def configure_mpe(self):
         """Configure MPE zones and pitch bend ranges"""
+        if Constants.DEBUG:
+            print("Configuring MPE zones and pitch bend ranges")
+            
         # Reset all channels first
         self.message_sender.send_message([0xB0, 121, 0])  # Reset all controllers
         self.message_sender.send_message([0xB0, 123, 0])  # All notes off
@@ -363,18 +388,25 @@ class MPEConfigurator:
         # Configure MPE zone (RPN 6)
         self.message_sender.send_message([0xB0, 101, 0])  # RPN MSB
         self.message_sender.send_message([0xB0, 100, 6])  # RPN LSB (MCM)
-        self.message_sender.send_message([0xB0, 6, Constants.MPE_ZONE_END - Constants.MPE_ZONE_START + 1])
+        zone_size = Constants.MPE_ZONE_END - Constants.MPE_ZONE_START + 1
+        self.message_sender.send_message([0xB0, 6, zone_size])
+        if Constants.DEBUG:
+            print(f"MPE zone configured: {zone_size} channels")
         
         # Configure Manager Channel pitch bend range
         self.message_sender.send_message([0xB0, 101, 0])  # RPN MSB
         self.message_sender.send_message([0xB0, 100, 0])  # RPN LSB (pitch bend)
         self.message_sender.send_message([0xB0, 6, Constants.MPE_MASTER_PITCH_BEND_RANGE])
+        if Constants.DEBUG:
+            print(f"Manager channel pitch bend range: {Constants.MPE_MASTER_PITCH_BEND_RANGE} semitones")
         
         # Configure Member Channel pitch bend range
         for channel in range(Constants.MPE_ZONE_START, Constants.MPE_ZONE_END + 1):
             self.message_sender.send_message([0xB0 | channel, 101, 0])  # RPN MSB
             self.message_sender.send_message([0xB0 | channel, 100, 0])  # RPN LSB (pitch bend)
             self.message_sender.send_message([0xB0 | channel, 6, Constants.MPE_MEMBER_PITCH_BEND_RANGE])
+        if Constants.DEBUG:
+            print(f"Member channels pitch bend range: {Constants.MPE_MEMBER_PITCH_BEND_RANGE} semitones")
 
 class MidiMessageSender:
     """Handles the actual sending of MIDI messages"""
@@ -389,6 +421,8 @@ class MidiMessageSender:
 
     def set_ready(self, ready):
         self.ready_for_midi = ready
+        if Constants.DEBUG and ready:
+            print("MIDI message sender ready")
 
 class MidiSystemInitializer:
     """Handles system initialization and greeting sequence"""
@@ -541,12 +575,13 @@ class MidiLogic:
 
     def _configure_system(self):
         """Initialize system with MPE configuration and greeting sequence"""
+        if Constants.DEBUG:
+            print("\nInitializing MIDI system...")
         self.mpe_configurator.configure_mpe()
         self.system_initializer.play_greeting()
         self.message_sender.set_ready(True)
-        
         if Constants.DEBUG:
-            print("MIDI system ready for input")
+            print("MIDI system initialization complete")
 
     def handle_config_message(self, message):
         return self.control_processor.handle_config_message(message)
@@ -580,4 +615,8 @@ class MidiLogic:
         return self.note_processor.handle_octave_shift(direction)
 
     def cleanup(self):
+        if Constants.DEBUG:
+            print("\nCleaning up MIDI system...")
         self.transport.cleanup()
+        if Constants.DEBUG:
+            print("MIDI system cleanup complete")

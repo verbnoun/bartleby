@@ -9,7 +9,6 @@ from midi import MidiLogic
 
 class Constants:
     DEBUG = False
-    SEE_HEARTBEAT = False
     SETUP_DELAY = 0.1
     MIDI_TX = board.GP16
     MIDI_RX = board.GP17

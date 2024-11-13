@@ -1,12 +1,11 @@
 import board
 import time
-import math
 import digitalio
 import rotaryio
 import analogio
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     # ADC Constants 
     ADC_MAX = 65535
     ADC_MIN = 1
@@ -45,6 +44,7 @@ class Constants:
     POT_LOWER_TRIM = 0.05
     POT_UPPER_TRIM = 0.0
     NUM_POTS = 14
+    POT_LOG_THRESHOLD = 0.05  # Only log pot changes greater than 5%
     
     # Keyboard Handler Constants
     NUM_KEYS = 25
@@ -166,6 +166,7 @@ class KeyState:
         self.pressure = 0  # 0.0 to 1.0 for MPE pressure
         self.strike_velocity = 0  # 0.0 to 1.0 for MIDI note velocity
         self.last_update = 0
+        self.adc_timestamp = 0  # Time when ADC reading started
 
 class KeyStateTracker:
     def __init__(self):
@@ -180,6 +181,8 @@ class KeyStateTracker:
         if key_state.active:
             # Key is already active - use deactivation threshold
             if max_pressure < Constants.DEACTIVATION_THRESHOLD:
+                if Constants.DEBUG:
+                    print(f"Key deactivated - pressure: {max_pressure:.3f}")
                 key_state.active = False
                 return False
             return True
@@ -188,11 +191,14 @@ class KeyStateTracker:
             if max_pressure > Constants.INITIAL_ACTIVATION_THRESHOLD:
                 key_state.active = True
                 key_state.strike_velocity = max_pressure  # Capture initial velocity
+                if Constants.DEBUG:
+                    print(f"Key activated - initial velocity: {key_state.strike_velocity:.3f}")
                 return True
             return False
 
     def update_key_state(self, key_index, left_normalized, right_normalized, position, pressure):
         """Update state for a single key and determine if it changed"""
+        start_time = time.monotonic()
         key_state = self.key_states[key_index]
         is_active = self.check_key_activation(left_normalized, right_normalized, key_state)
         
@@ -201,15 +207,22 @@ class KeyStateTracker:
             "L": left_normalized,
             "R": right_normalized,
             "position": position,
-            "pressure": pressure
+            "pressure": pressure,
+            "processing_time": time.monotonic() - start_time
         }
         
         if is_active:
             if key_index not in self.active_keys:
                 self.active_keys.append(key_index)
+                if Constants.DEBUG:
+                    print(f"\nKey {key_index} activated")
+                    print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
         else:
             if key_index in self.active_keys:
                 self.active_keys.remove(key_index)
+                if Constants.DEBUG:
+                    print(f"\nKey {key_index} deactivated")
+                    print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
 
         # Check if state changed
         if (left_normalized != key_state.left_value or 
@@ -221,6 +234,11 @@ class KeyStateTracker:
             key_state.position = position
             key_state.pressure = pressure
             key_state.last_update = time.monotonic()
+            if Constants.DEBUG:
+                print(f"\nKey {key_index} state updated:")
+                print(f"L/R: {left_normalized:.3f}/{right_normalized:.3f}")
+                print(f"Position: {position:.3f}, Pressure: {pressure:.3f}")
+                print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
             return True
         return False
 
@@ -298,6 +316,8 @@ class KeyboardHandler:
         
     def _process_key_reading(self, key_index, left_value, right_value, changed_keys):
         """Process individual key readings with MPE calculations"""
+        start_time = time.monotonic()
+        
         # Convert ADC values to normalized pressures
         left_resistance = self.pressure_processor.adc_to_resistance(left_value)
         right_resistance = self.pressure_processor.adc_to_resistance(right_value)
@@ -318,13 +338,6 @@ class KeyboardHandler:
                 key_state.strike_velocity if not key_state.active else None  # Initial velocity
             ))
             
-            # Debug output
-            if Constants.DEBUG:
-                print(f"\nKey {key_index:02d}")
-                print(f"  L: ADC={left_value:5d} → R={left_resistance:8.1f}Ω → N={left_normalized:.3f}")
-                print(f"  R: ADC={right_value:5d} → R={right_resistance:8.1f}Ω → N={right_normalized:.3f}")
-                print(f"  MPE: pos={position:.3f} pressure={pressure:.3f}")
-        
     def format_key_hardware_data(self):
         """Format hardware data for debugging"""
         return self.state_tracker.format_key_hardware_data()
@@ -416,6 +429,7 @@ class PotentiometerHandler:
             raw_value = self.multiplexer.read_channel(i)
             normalized_new = self.normalize_value(raw_value)
             change = abs(raw_value - self.last_reported_values[i])
+            change_normalized = abs(normalized_new - self.last_normalized_values[i])
 
             if self.is_active[i]:
                 # Only report changes if they exceed the change threshold
@@ -426,6 +440,11 @@ class PotentiometerHandler:
                         self.last_reported_values[i] = raw_value
                         self.last_normalized_values[i] = normalized_new
                         self.last_change[i] = change
+                        
+                        # Only log if change exceeds logging threshold
+                        if Constants.DEBUG and change_normalized > Constants.POT_LOG_THRESHOLD:
+                            print(f"\nPot {i}: {self.last_normalized_values[i]:.3f} -> {normalized_new:.3f}")
+                            
                 elif change < Constants.POT_THRESHOLD:
                     self.is_active[i] = False
             elif change > Constants.POT_THRESHOLD:
@@ -435,5 +454,9 @@ class PotentiometerHandler:
                     self.last_reported_values[i] = raw_value
                     self.last_normalized_values[i] = normalized_new
                     self.last_change[i] = change
+                    
+                    # Only log if change exceeds logging threshold
+                    if Constants.DEBUG and change_normalized > Constants.POT_LOG_THRESHOLD:
+                        print(f"\nPot {i}: {self.last_normalized_values[i]:.3f} -> {normalized_new:.3f}")
                 
         return changed_pots
