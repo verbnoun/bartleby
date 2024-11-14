@@ -178,49 +178,69 @@ class NoteState:
 class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
     def __init__(self):
         self.active_notes = {}
-        self.note_queue = deque((), Constants.MAX_ACTIVE_NOTES)
+        self.channel_notes = {}  # NEW: channel to set of key_ids mapping
         self.available_channels = list(range(
             Constants.ZONE_START, 
             Constants.ZONE_END + 1
         ))
 
     def allocate_channel(self, key_id):
+        """Get next available channel using robust allocation strategy"""
+        # 1. Check if note already has an active channel
         if key_id in self.active_notes and self.active_notes[key_id].active:
             return self.active_notes[key_id].channel
 
-        if self.available_channels:
-            channel = self.available_channels.pop(0)
+        # 2. Find completely free channel first
+        for channel in self.available_channels:
+            if channel not in self.channel_notes or not self.channel_notes[channel]:
+                if Constants.DEBUG:
+                    print(f"Allocated free channel {channel} for key {key_id}")
+                return channel
+
+        # 3. If no free channels, find channel with fewest active notes
+        min_notes = float('inf')
+        best_channel = None
+        
+        for channel in self.available_channels:
+            note_count = len(self.channel_notes.get(channel, set()))
+            if note_count < min_notes:
+                min_notes = note_count
+                best_channel = channel
+
+        if best_channel is not None:
             if Constants.DEBUG:
-                print(f"Allocated channel {channel} for key {key_id}")
-            return channel
-            
-        if len(self.note_queue):
-            oldest_key_id = self.note_queue.popleft()
-            channel = self.active_notes[oldest_key_id].channel
-            if Constants.DEBUG:
-                print(f"Note stealing: Released channel {channel} from key {oldest_key_id} for new key {key_id}")
-            self._release_note(oldest_key_id)
-            return channel
-            
+                print(f"Allocated least used channel {best_channel} for key {key_id}")
+            return best_channel
+
+        # 4. Fallback to first channel if all else fails
         if Constants.DEBUG:
-            print(f"No channels available, defaulting to first MPE channel for key {key_id}")
+            print(f"No optimal channels available, using first MPE channel for key {key_id}")
         return Constants.ZONE_START
 
     def add_note(self, key_id, midi_note, channel, velocity):
+        """Add new note and track its channel allocation"""
         note_state = NoteState(key_id, midi_note, channel, velocity)
         self.active_notes[key_id] = note_state
-        self.note_queue.append(key_id)
+        
+        # Track channel usage
+        if channel not in self.channel_notes:
+            self.channel_notes[channel] = set()
+        self.channel_notes[channel].add(key_id)
+        
         if Constants.DEBUG:
             print(f"Added note: key={key_id}, note={midi_note}, channel={channel}, velocity={velocity}")
         return note_state
 
     def _release_note(self, key_id):
+        """Internal method to handle note release and cleanup"""
         if key_id in self.active_notes:
             note_state = self.active_notes[key_id]
             note_state.active = False
             channel = note_state.channel
-            if channel not in self.available_channels:
-                self.available_channels.append(channel)
+            
+            # Clean up channel tracking
+            if channel in self.channel_notes:
+                self.channel_notes[channel].discard(key_id)
                 if Constants.DEBUG:
                     print(f"Released channel {channel} from key {key_id}")
 
