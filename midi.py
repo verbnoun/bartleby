@@ -4,7 +4,7 @@ import busio
 from collections import deque
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -62,60 +62,33 @@ class Constants:
     TIMBRE_CENTER = 64         # Center value for CC74 Y-axis
 
 class MidiTransportManager:
-    """Manages both UART and USB MIDI output streams"""
-    def __init__(self, tx_pin, rx_pin, midi_callback=None):
-        if Constants.DEBUG:
-            print("Initializing MIDI Transport Manager")
+    """Manages MIDI output streams using shared transport"""
+    def __init__(self, transport_manager, midi_callback=None):
+        self.uart = transport_manager.get_uart()
+        self.usb_midi = transport_manager.get_usb_midi()
         self.midi_callback = midi_callback
-        self._setup_uart(tx_pin, rx_pin)
-        self._setup_usb()
-        
-    def _setup_uart(self, tx_pin, rx_pin):
-        """Initialize UART for MIDI communication"""
-        try:
-            self.uart = busio.UART(
-                tx=tx_pin,
-                rx=rx_pin,
-                baudrate=Constants.MIDI_BAUDRATE,
-                bits=8,
-                parity=None,
-                stop=1,
-                timeout=Constants.UART_TIMEOUT
-            )
-            if Constants.DEBUG:
-                print(f"UART MIDI initialized on TX:{tx_pin}, RX:{rx_pin}")
-        except Exception as e:
-            print(f"UART initialization error on pins TX:{tx_pin}, RX:{rx_pin} - {str(e)}")
-            raise
-
-    def _setup_usb(self):
-        """Initialize USB MIDI output"""
-        try:
-            self.usb_midi = usb_midi.ports[1]
-            if Constants.DEBUG:
-                print("USB MIDI initialized on port 1")
-        except Exception as e:
-            print(f"USB MIDI initialization error on port 1 - {str(e)}")
-            raise
+        print("MIDI transport initialized")
 
     def send_message(self, message):
         """Send MIDI message to both UART and USB outputs"""
         try:
-            self.uart.write(bytes(message))
-            self.usb_midi.write(bytes(message))
+            if isinstance(message, (bytes, bytearray)):
+                self.uart.write(message)
+            else:
+                self.uart.write(bytes(message))
+            if self.usb_midi:
+                self.usb_midi.write(bytes(message))
         except Exception as e:
-            if str(e):
-                print(f"Error sending MIDI message {message.hex() if hasattr(message, 'hex') else message}: {str(e)}")
+            print(f"Error sending MIDI message: {str(e)}")
 
-    def cleanup(self):
-        """Clean shutdown of MIDI transport"""
-        try:
-            self.uart.deinit()
-            if Constants.DEBUG:
-                print("MIDI transport cleaned up successfully")
-        except Exception as e:
-            if str(e):
-                print(f"Error during MIDI transport cleanup: {str(e)}")
+    def read(self, size=None):
+        """Read from UART"""
+        return self.uart.read(size)
+
+    @property
+    def in_waiting(self):
+        """Check bytes waiting"""
+        return self.uart.in_waiting
 
 class ControllerManager:  # Renamed from CCConfigManager for clarity
     """Manages controller assignments and configuration for pots"""
@@ -545,9 +518,9 @@ class MidiEventRouter:
 
 class MidiLogic:
     """Main MIDI logic coordinator class"""
-    def __init__(self, midi_tx, midi_rx, midi_callback=None):
+    def __init__(self, transport_manager, midi_callback=None):
         # Initialize transport and message sender
-        self.transport = MidiTransportManager(midi_tx, midi_rx, midi_callback)
+        self.transport = MidiTransportManager(transport_manager, midi_callback)
         self.message_sender = MidiMessageSender(self.transport)
         
         # Initialize managers and processors
