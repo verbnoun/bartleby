@@ -9,7 +9,7 @@ from midi import MidiLogic
 
 class Constants:
     DEBUG = False
-    SEE_HEARTBEAT = True
+    SEE_HEARTBEAT = False
     SETUP_DELAY = 0.1
     MIDI_TX = board.GP16
     MIDI_RX = board.GP17
@@ -17,7 +17,7 @@ class Constants:
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
-    CONNECTION_TIMEOUT = 1.0
+    CONNECTION_TIMEOUT = 2.0
     
 
 class StateManager:
@@ -42,14 +42,24 @@ class StateManager:
         self.last_encoder_scan = self.current_time
 
 class ConnectionManager:
-    def __init__(self, detect_pin):
+    def __init__(self, detect_pin, midi_transport):
         self.detect_pin = digitalio.DigitalInOut(detect_pin)
         self.detect_pin.direction = digitalio.Direction.OUTPUT
         self.detect_pin.value = True
         self.last_detect_state = True
         self.last_candide_message = 0
         self.candide_connected = False
-        self.has_greeted = False
+        self.config_received = False
+        self.midi_transport = midi_transport
+        
+    def _reset_connection_state(self):
+        """Reset all connection state variables"""
+        self.candide_connected = False
+        self.config_received = False
+        self.last_candide_message = 0
+        # Clear UART buffers
+        while self.midi_transport.uart.in_waiting:
+            self.midi_transport.uart.read()
         
     def update_connection_state(self):
         detect_state = self.detect_pin.value
@@ -57,11 +67,11 @@ class ConnectionManager:
         
         if detect_state and not self.last_detect_state:
             print("Candide physically connected")
+            self._reset_connection_state()
             connection_changed = True
         elif not detect_state and self.last_detect_state:
             print("Candide physically unplugged")
-            self.candide_connected = False
-            self.has_greeted = False
+            self._reset_connection_state()
             connection_changed = True
             
         self.last_detect_state = detect_state
@@ -77,8 +87,7 @@ class ConnectionManager:
         if (self.candide_connected and 
             time.monotonic() - self.last_candide_message > Constants.CONNECTION_TIMEOUT):
             print("Candide software connection lost")
-            self.candide_connected = False
-            self.has_greeted = False
+            self._reset_connection_state()
             return True
         return False
     
@@ -180,9 +189,9 @@ class Bartleby:
     def __init__(self):
         print("\nWake Up Bartleby!")
         self.state_manager = StateManager()
-        self.connection_manager = ConnectionManager(Constants.DETECT_PIN)
-        self.hardware = HardwareCoordinator()
         self.midi = self._setup_midi()
+        self.connection_manager = ConnectionManager(Constants.DETECT_PIN, self.midi.transport)
+        self.hardware = HardwareCoordinator()
         self._setup_initial_state()
         
     def _setup_midi(self):
@@ -193,8 +202,22 @@ class Bartleby:
         )
 
     def _handle_midi_config(self, message):
-        if self.midi:
-            self.midi.handle_config_message(message)
+        if message.startswith("cc:"):
+            if not self.connection_manager.config_received:
+                print("Initial config received, ready for operation")
+                self.connection_manager.config_received = True
+                # Process the config message
+                self.midi.handle_config_message(message)
+                # Play welcome chime here after config
+                self.play_welcome_chime()
+            else:
+                # Handle subsequent config messages normally
+                self.midi.handle_config_message(message)
+
+    def play_welcome_chime(self):
+        """Play welcome chime - implement actual chime logic here"""
+        print("Playing welcome chime")
+        # Add actual chime implementation
 
     def _setup_initial_state(self):
         self.hardware.reset_encoders()
@@ -215,13 +238,13 @@ class Bartleby:
                 new_bytes = self.midi.transport.uart.read(self.midi.transport.uart.in_waiting)
                 if new_bytes:
                     try:
-                        message = new_bytes.decode('utf-8')
+                        message = new_bytes.decode('utf-8').strip()  # Decode byte sequence to UTF-8 string
                         if message.startswith("cc:"):
                             self._handle_midi_config(message)
                             if Constants.DEBUG:
                                 print(f"Received config: {message}")
                         elif Constants.DEBUG:
-                            if message.strip() == "♡":
+                            if message == "♡":
                                 if Constants.SEE_HEARTBEAT:
                                     print("Heartbeat received")
                             else:
