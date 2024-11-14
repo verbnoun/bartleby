@@ -8,17 +8,25 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
+    # Debug Settings
     DEBUG = False
     SEE_HEARTBEAT = False
+    
+    # Hardware Setup
     SETUP_DELAY = 0.1
-    MIDI_TX = board.GP16
-    MIDI_RX = board.GP17
+    
+    # UART/MIDI Pins
+    UART_TX = board.GP16
+    UART_RX = board.GP17
+    
+    # Connection
     DETECT_PIN = board.GP22
+    CONNECTION_TIMEOUT = 2.0
+    
+    # Timing Intervals
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
-    CONNECTION_TIMEOUT = 2.0
-    
 
 class StateManager:
     def __init__(self):
@@ -196,8 +204,8 @@ class Bartleby:
         
     def _setup_midi(self):
         return MidiLogic(
-            midi_tx=Constants.MIDI_TX,
-            midi_rx=Constants.MIDI_RX,
+            midi_tx=Constants.UART_TX,
+            midi_rx=Constants.UART_RX,
             midi_callback=self._handle_midi_config
         )
 

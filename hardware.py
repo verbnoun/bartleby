@@ -5,11 +5,11 @@ import rotaryio
 import analogio
 
 class Constants:
-    # Logging
+    # Debug Settings
     DEBUG = False
-    POT_LOG_THRESHOLD = 0.01  
-
-    # ADC Constants 
+    POT_LOG_THRESHOLD = 0.01
+    
+    # ADC Constants
     ADC_MAX = 65535
     ADC_MIN = 1
     
@@ -37,10 +37,12 @@ class Constants:
     CONTROL_MUX_S2 = board.GP14
     CONTROL_MUX_S3 = board.GP15
     
-    # Encoder GPIO Pins
     OCTAVE_ENC_CLK = board.GP20
     OCTAVE_ENC_DT = board.GP21
 
+    # Timing Intervals
+    ENCODER_SCAN_INTERVAL = 0.001
+    
     # Potentiometer Constants
     POT_THRESHOLD = 1500  # Threshold for initial pot activation
     POT_CHANGE_THRESHOLD = 400  # Threshold for subsequent changes when pot is active
@@ -48,11 +50,11 @@ class Constants:
     POT_UPPER_TRIM = 0.0
     NUM_POTS = 14
     
-    # Keyboard Handler Constants
+    # Keyboard Constants
     NUM_KEYS = 25
     NUM_CHANNELS = 50
 
-    # Velostat Sensor Constants
+    # Sensor Constants
     MAX_VK_RESISTANCE = 11000  # Upper resistance bound
     MIN_VK_RESISTANCE = 500    # Lower resistance bound
     INITIAL_ACTIVATION_THRESHOLD = 0.001  # Threshold for note-on
@@ -62,6 +64,7 @@ class Constants:
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
+        """Initialize multiplexer with signal and select pins"""
         self.sig = analogio.AnalogIn(sig_pin)
         # Order pins from LSB to MSB (S0 to S3)
         self.select_pins = [
@@ -72,6 +75,7 @@ class Multiplexer:
             pin.value = False  # Initialize all pins to 0
 
     def select_channel(self, channel):
+        """Set multiplexer channel selection pins"""
         # Convert channel number to 4-bit binary
         # For example, channel 5 (0101) should set S0=1, S1=0, S2=1, S3=0
         for i in range(4):
@@ -79,6 +83,7 @@ class Multiplexer:
         time.sleep(0.0001)  # Small delay to allow mux to settle
 
     def read_channel(self, channel):
+        """Read value from specified multiplexer channel"""
         if 0 <= channel < 16:  # Ensure channel is in valid range
             self.select_channel(channel)
             return self.sig.value
@@ -87,6 +92,7 @@ class Multiplexer:
 class KeyMultiplexer:
     def __init__(self, l1_sig_pin, l1_s0_pin, l1_s1_pin, l1_s2_pin, l1_s3_pin, 
                  l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
+        """Initialize key multiplexer with two-level multiplexing"""
         self.sig = analogio.AnalogIn(l1_sig_pin)
 
         # Initialize level 1 (MUX4) select pins
@@ -104,14 +110,17 @@ class KeyMultiplexer:
             pin.direction = digitalio.Direction.OUTPUT
 
     def select_channel(self, level, channel):
+        """Set channel selection pins for specified level"""
         pins = self.l1_select_pins if level == 1 else self.l2_select_pins
         for i, pin in enumerate(pins):
             pin.value = (channel >> i) & 1
 
     def read_channel(self):
+        """Read current channel value"""
         return self.sig.value
 
     def scan_keyboard(self):
+        """Scan all keyboard channels and return raw values"""
         raw_values = []
         for i in range(4):
             self.select_channel(1, i)  # Select a level 1 channel
@@ -161,6 +170,7 @@ class PressureSensorProcessor:
 
 class KeyState:
     def __init__(self):
+        """Initialize key state tracking"""
         self.active = False
         self.left_value = 0
         self.right_value = 0
@@ -172,6 +182,7 @@ class KeyState:
 
 class KeyStateTracker:
     def __init__(self):
+        """Initialize key state tracking system"""
         self.key_states = [KeyState() for _ in range(Constants.NUM_KEYS)]
         self.active_keys = []
         self.key_hardware_data = {}
@@ -250,6 +261,7 @@ class KeyStateTracker:
 
 class KeyboardHandler:
     def __init__(self, l1a_multiplexer, l1b_multiplexer, l2_s0_pin, l2_s1_pin, l2_s2_pin, l2_s3_pin):
+        """Initialize keyboard handler with multiplexers and support classes"""
         self.l1a_mux = l1a_multiplexer
         self.l1b_mux = l1b_multiplexer
         
@@ -346,6 +358,7 @@ class KeyboardHandler:
 
 class RotaryEncoderHandler:
     def __init__(self, octave_clk_pin, octave_dt_pin):
+        """Initialize rotary encoder handler"""
         # Initialize encoders using rotaryio
         self.encoders = [
             rotaryio.IncrementalEncoder(octave_clk_pin, octave_dt_pin, divisor=2)
@@ -362,16 +375,19 @@ class RotaryEncoderHandler:
         self.reset_all_encoder_positions()
 
     def reset_all_encoder_positions(self):
+        """Reset all encoder positions to initial state"""
         for i in range(self.num_encoders):
             self.reset_encoder_position(i)
 
     def reset_encoder_position(self, encoder_num):
+        """Reset specified encoder to initial position"""
         if 0 <= encoder_num < self.num_encoders:
             self.encoders[encoder_num].position = 0
             self.encoder_positions[encoder_num] = 0
             self.last_positions[encoder_num] = 0
 
     def read_encoder(self, encoder_num):
+        """Read encoder and return events if position changed"""
         events = []
         encoder = self.encoders[encoder_num]
         
@@ -402,12 +418,14 @@ class RotaryEncoderHandler:
         return events
 
     def get_encoder_position(self, encoder_num):
+        """Get current position of specified encoder"""
         if 0 <= encoder_num < self.num_encoders:
             return self.encoder_positions[encoder_num]
         return 0
 
 class PotentiometerHandler:
     def __init__(self, multiplexer):
+        """Initialize potentiometer handler with multiplexer"""
         self.multiplexer = multiplexer
         self.last_reported_values = [0] * Constants.NUM_POTS
         self.last_normalized_values = [0.0] * Constants.NUM_POTS
@@ -415,6 +433,7 @@ class PotentiometerHandler:
         self.last_change = [0] * Constants.NUM_POTS
 
     def normalize_value(self, value):
+        """Convert ADC value to normalized range (0.0-1.0)"""
         clamped_value = max(min(value, Constants.ADC_MAX), Constants.ADC_MIN)
         normalized = (clamped_value - Constants.ADC_MIN) / (Constants.ADC_MAX - Constants.ADC_MIN)
         if normalized < Constants.POT_LOWER_TRIM:
@@ -426,6 +445,7 @@ class PotentiometerHandler:
         return round(normalized, 3)  # Reduced precision to help with noise
 
     def read_pots(self):
+        """Read all potentiometers and return changed values"""
         changed_pots = []
         for i in range(Constants.NUM_POTS):
             raw_value = self.multiplexer.read_channel(i)

@@ -10,9 +10,9 @@ class Constants:
     UART_TIMEOUT = 0.001
     
     # MPE Configuration
-    MPE_MASTER_CHANNEL = 0      # MIDI channel 1 (zero-based)
-    MPE_ZONE_START = 1          # MIDI channel 2 (zero-based)
-    MPE_ZONE_END = 11          # MIDI channel 12 (11 member channels)
+    ZONE_MANAGER = 0           # MIDI channel 1 (zero-based) - aligned with Candide naming
+    ZONE_START = 1            # MIDI channel 2 (zero-based)
+    ZONE_END = 15            # MIDI channel 16 (15 member channels)
 
     # MIDI CC Numbers - Standard Controls
     CC_MODULATION = 1
@@ -34,7 +34,7 @@ class Constants:
     PITCH_BEND_MAX = 16383
     
     # Note Management
-    MAX_ACTIVE_NOTES = 11       # Maximum concurrent notes (matches available MPE channels)
+    MAX_ACTIVE_NOTES = 15       # Maximum concurrent notes (matches available channels)
     
     # MPE Settings
     MPE_MEMBER_PITCH_BEND_RANGE = 48   # 48 semitones for Member Channels
@@ -117,23 +117,23 @@ class MidiTransportManager:
             if str(e):
                 print(f"Error during MIDI transport cleanup: {str(e)}")
 
-class CCConfigManager:
-    """Manages CC assignments and configuration for pots"""
+class ControllerManager:  # Renamed from CCConfigManager for clarity
+    """Manages controller assignments and configuration for pots"""
     def __init__(self):
-        self.cc_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
+        self.controller_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
 
     def reset_to_defaults(self):
-        """Reset all CC assignments to default values"""
-        self.cc_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
+        """Reset all controller assignments to default values"""
+        self.controller_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
         if Constants.DEBUG:
-            print("CC assignments reset to defaults")
+            print("Controller assignments reset to defaults")
 
-    def get_cc_for_pot(self, pot_number):
-        """Get the CC number assigned to a pot"""
-        return self.cc_assignments.get(pot_number, pot_number)
+    def get_controller_for_pot(self, pot_number):  # Renamed from get_cc_for_pot
+        """Get the controller number assigned to a pot"""
+        return self.controller_assignments.get(pot_number, pot_number)
 
-    def parse_config_message(self, message):
-        """Parse configuration message from Candide
+    def handle_config_message(self, message):  # Renamed from parse_config_message to match Candide style
+        """Handle configuration message from Candide
         Format: cc:0=74,1=71,2=73
         Returns True if successful, False if invalid format
         """
@@ -149,14 +149,14 @@ class CCConfigManager:
                 pot_num = int(pot)
                 cc_num = int(cc)
                 if 0 <= pot_num <= 13 and 0 <= cc_num <= 127:
-                    self.cc_assignments[pot_num] = cc_num
+                    self.controller_assignments[pot_num] = cc_num
                     if Constants.DEBUG:
                         print(f"Assigned Pot {pot_num} to CC {cc_num}")
 
             return True
 
         except Exception as e:
-            print(f"Error parsing CC config: {str(e)}")
+            print(f"Error parsing controller config: {str(e)}")
             return False
 
 class NoteState:
@@ -175,13 +175,13 @@ class NoteState:
         self.timbre = Constants.TIMBRE_CENTER
         self.active = True
 
-class MPEChannelManager:
+class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
     def __init__(self):
         self.active_notes = {}
         self.note_queue = deque((), Constants.MAX_ACTIVE_NOTES)
         self.available_channels = list(range(
-            Constants.MPE_ZONE_START, 
-            Constants.MPE_ZONE_END + 1
+            Constants.ZONE_START, 
+            Constants.ZONE_END + 1
         ))
 
     def allocate_channel(self, key_id):
@@ -204,7 +204,7 @@ class MPEChannelManager:
             
         if Constants.DEBUG:
             print(f"No channels available, defaulting to first MPE channel for key {key_id}")
-        return Constants.MPE_ZONE_START
+        return Constants.ZONE_START
 
     def add_note(self, key_id, midi_note, channel, velocity):
         note_state = NoteState(key_id, midi_note, channel, velocity)
@@ -318,28 +318,28 @@ class MPENoteProcessor:
         return midi_events
 
 class MidiControlProcessor:
-    """Handles MIDI control change processing with configurable CC assignments"""
+    """Handles MIDI control change processing with configurable assignments"""
     def __init__(self):
-        self.cc_config = CCConfigManager()
+        self.controller_config = ControllerManager()  # Updated to new name
 
-    def process_pot_changes(self, changed_pots):
-        """Process pot changes and generate MIDI events"""
+    def process_controller_changes(self, changed_pots):  # Renamed from process_pot_changes
+        """Process controller changes and generate MIDI events"""
         midi_events = []
         for pot_index, old_value, new_value in changed_pots:
-            cc_number = self.cc_config.get_cc_for_pot(pot_index)
+            controller_number = self.controller_config.get_controller_for_pot(pot_index)  # Updated method name
             midi_value = int(new_value * 127)
-            midi_events.append(('control_change', cc_number, midi_value))
+            midi_events.append(('control_change', controller_number, midi_value))
             if Constants.DEBUG:
-                print(f"Pot {pot_index} changed: CC{cc_number}={midi_value}")
+                print(f"Controller {pot_index} changed: CC{controller_number}={midi_value}")
         return midi_events
 
     def handle_config_message(self, message):
         """Process configuration message from Candide"""
-        return self.cc_config.parse_config_message(message)
+        return self.controller_config.handle_config_message(message)
 
     def reset_to_defaults(self):
-        """Reset CC assignments to defaults"""
-        self.cc_config.reset_to_defaults()
+        """Reset controller assignments to defaults"""
+        self.controller_config.reset_to_defaults()
 
 class MPEConfigurator:
     """Handles MPE-specific configuration and setup"""
@@ -358,7 +358,7 @@ class MPEConfigurator:
         # Configure MPE zone (RPN 6)
         self.message_sender.send_message([0xB0, 101, 0])  # RPN MSB
         self.message_sender.send_message([0xB0, 100, 6])  # RPN LSB (MCM)
-        zone_size = Constants.MPE_ZONE_END - Constants.MPE_ZONE_START + 1
+        zone_size = Constants.ZONE_END - Constants.ZONE_START + 1
         self.message_sender.send_message([0xB0, 6, zone_size])
         if Constants.DEBUG:
             print(f"MPE zone configured: {zone_size} channels")
@@ -371,7 +371,7 @@ class MPEConfigurator:
             print(f"Manager channel pitch bend range: {Constants.MPE_MASTER_PITCH_BEND_RANGE} semitones")
         
         # Configure Member Channel pitch bend range
-        for channel in range(Constants.MPE_ZONE_START, Constants.MPE_ZONE_END + 1):
+        for channel in range(Constants.ZONE_START, Constants.ZONE_END + 1):
             self.message_sender.send_message([0xB0 | channel, 101, 0])  # RPN MSB
             self.message_sender.send_message([0xB0 | channel, 100, 0])  # RPN LSB (pitch bend)
             self.message_sender.send_message([0xB0 | channel, 6, Constants.MPE_MEMBER_PITCH_BEND_RANGE])
@@ -437,8 +437,8 @@ class MidiEventRouter:
         self.message_sender = message_sender
         self.channel_manager = channel_manager
 
-    def route_event(self, event):
-        """Route a MIDI event to the appropriate handler"""
+    def handle_event(self, event):  # Renamed from route_event to match Candide style
+        """Handle a MIDI event"""
         if not self.message_sender.ready_for_midi:
             return
             
@@ -516,7 +516,7 @@ class MidiEventRouter:
             self.channel_manager.release_note(key_id)
 
     def _handle_control_change(self, cc_number, midi_value):
-        self.message_sender.send_message([0xB0 | Constants.MPE_MASTER_CHANNEL, cc_number, midi_value])
+        self.message_sender.send_message([0xB0 | Constants.ZONE_MANAGER, cc_number, midi_value])
 
     def _calculate_pitch_bend(self, position):
         """Calculate pitch bend value from position (-1 to 1)"""
@@ -531,7 +531,7 @@ class MidiLogic:
         self.message_sender = MidiMessageSender(self.transport)
         
         # Initialize managers and processors
-        self.channel_manager = MPEChannelManager()
+        self.channel_manager = ZoneManager()  # Updated to new name
         self.note_processor = MPENoteProcessor(self.channel_manager)
         self.control_processor = MidiControlProcessor()
         
@@ -556,7 +556,7 @@ class MidiLogic:
     def handle_config_message(self, message):
         return self.control_processor.handle_config_message(message)
 
-    def reset_cc_defaults(self):
+    def reset_controller_defaults(self):  # Renamed from reset_cc_defaults
         self.control_processor.reset_to_defaults()
 
     def update(self, changed_keys, changed_pots, config):
@@ -569,10 +569,10 @@ class MidiLogic:
             midi_events.extend(self.note_processor.process_key_changes(changed_keys, config))
         
         if changed_pots:
-            midi_events.extend(self.control_processor.process_pot_changes(changed_pots))
+            midi_events.extend(self.control_processor.process_controller_changes(changed_pots))  # Updated method name
         
         for event in midi_events:
-            self.event_router.route_event(event)
+            self.event_router.handle_event(event)  # Updated method name
             
         return midi_events
 
@@ -580,6 +580,9 @@ class MidiLogic:
         if not self.message_sender.ready_for_midi:
             return []
         return self.note_processor.handle_octave_shift(direction)
+
+    def reset_cc_defaults(self):
+        pass
 
     def cleanup(self):
         if Constants.DEBUG:
