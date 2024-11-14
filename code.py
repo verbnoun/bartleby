@@ -218,9 +218,18 @@ class Bartleby:
                 self.midi.handle_config_message(message)
                 # Play welcome chime here after config
                 self.play_welcome_chime()
+                # Send all pots values
+                self.send_pots_values()
             else:
                 # Handle subsequent config messages normally
                 self.midi.handle_config_message(message)
+
+    def send_pots_values(self):
+        """Send all potentiometer values"""
+        pots_values = self.hardware.components['pots'].read_pots()
+        for pot_value in pots_values:
+            self.midi.send_pot_value(pot_value)
+        print("Potentiometer values sent")
 
     def play_welcome_chime(self):
         """Play welcome chime - implement actual chime logic here"""
