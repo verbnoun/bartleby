@@ -81,9 +81,16 @@ class MidiTransportManager:
         """Send MIDI message to MIDI device"""
         try:
             if isinstance(message, list):
+                # Debug logging for raw MIDI message
+                if Constants.DEBUG:
+                    print(f"Raw MIDI Message: {[hex(x) for x in message]}")
+                
                 # Convert low-level message to appropriate Adafruit MIDI message
                 msg_type = message[0] & 0xF0
                 channel = message[0] & 0x0F
+                
+                if Constants.DEBUG:
+                    print(f"Parsed Message: Type={hex(msg_type)}, Channel={channel}")
                 
                 if msg_type == 0x90:  # Note On
                     self.midi_device.send(NoteOn(message[1], message[2], channel=channel))
