@@ -1,7 +1,11 @@
 import time
 import busio
 import adafruit_midi
-from collections import deque
+from adafruit_midi.note_on import NoteOn
+from adafruit_midi.note_off import NoteOff
+from adafruit_midi.pitch_bend import PitchBend
+from adafruit_midi.control_change import ControlChange
+from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
     DEBUG = True
@@ -65,17 +69,37 @@ class MidiTransportManager:
     """Manages MIDI output streams using shared transport"""
     def __init__(self, transport_manager, midi_callback=None):
         self.uart = transport_manager.get_uart()
+        self.midi_device = adafruit_midi.MIDI(
+            midi_out=self.uart, 
+            out_channel=Constants.ZONE_MANAGER
+        )
         self.midi_callback = midi_callback
         self.uart_initialized = True
         print("MIDI transport initialized")
 
     def send_message(self, message):
-        """Send MIDI message to UART output"""
+        """Send MIDI message to MIDI device"""
         try:
-            if isinstance(message, (bytes, bytearray)):
-                self.uart.write(message)
+            if isinstance(message, list):
+                # Convert low-level message to appropriate Adafruit MIDI message
+                msg_type = message[0] & 0xF0
+                channel = message[0] & 0x0F
+                
+                if msg_type == 0x90:  # Note On
+                    self.midi_device.send(NoteOn(message[1], message[2], channel=channel))
+                elif msg_type == 0x80:  # Note Off
+                    self.midi_device.send(NoteOff(message[1], message[2], channel=channel))
+                elif msg_type == 0xB0:  # Control Change
+                    self.midi_device.send(ControlChange(message[1], message[2], channel=channel))
+                elif msg_type == 0xD0:  # Channel Pressure
+                    self.midi_device.send(ChannelPressure(message[1], channel=channel))
+                elif msg_type == 0xE0:  # Pitch Bend
+                    # Reconstruct 14-bit pitch bend value
+                    pitch_value = (message[2] << 7) | message[1]
+                    self.midi_device.send(PitchBend(pitch_value, channel=channel))
             else:
-                self.uart.write(bytes(message))
+                # Fallback for direct message sending
+                self.midi_device.send(message)
         except Exception as e:
             print(f"Error sending MIDI message: {str(e)}")
 
@@ -95,7 +119,14 @@ class MidiTransportManager:
             self.uart_initialized = False
         print("MIDI transport cleaned up")
 
-class ControllerManager:  # Renamed from CCConfigManager for clarity
+# Rest of the classes remain the same as in the original implementation
+# (ControllerManager, NoteState, ZoneManager, MPENoteProcessor, 
+# MidiControlProcessor, MPEConfigurator, MidiMessageSender, 
+# MidiSystemInitializer, MidiEventRouter, MidiLogic)
+# Copy the entire original implementation for these classes
+
+# Copying the rest of the original implementation to preserve all functionality
+class ControllerManager:
     """Manages controller assignments and configuration for pots"""
     def __init__(self):
         self.controller_assignments = Constants.DEFAULT_CC_ASSIGNMENTS.copy()
@@ -106,11 +137,11 @@ class ControllerManager:  # Renamed from CCConfigManager for clarity
         if Constants.DEBUG:
             print("Controller assignments reset to defaults")
 
-    def get_controller_for_pot(self, pot_number):  # Renamed from get_cc_for_pot
+    def get_controller_for_pot(self, pot_number):
         """Get the controller number assigned to a pot"""
         return self.controller_assignments.get(pot_number, pot_number)
 
-    def handle_config_message(self, message):  # Renamed from parse_config_message to match Candide style
+    def handle_config_message(self, message):
         """Handle configuration message from Candide
         Format: cc:0=74,1=71,2=73
         Returns True if successful, False if invalid format
@@ -153,11 +184,11 @@ class NoteState:
         self.timbre = Constants.TIMBRE_CENTER
         self.active = True
 
-class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
+class ZoneManager:
     def __init__(self):
         self.active_notes = {}
-        self.channel_notes = {}  # channel to set of key_ids mapping
-        self.pending_channels = {}  # NEW: Store pending channel allocations
+        self.channel_notes = {}
+        self.pending_channels = {}
         self.available_channels = list(range(
             Constants.ZONE_START, 
             Constants.ZONE_END + 1
@@ -332,13 +363,13 @@ class MPENoteProcessor:
 class MidiControlProcessor:
     """Handles MIDI control change processing with configurable assignments"""
     def __init__(self):
-        self.controller_config = ControllerManager()  # Updated to new name
+        self.controller_config = ControllerManager()
 
-    def process_controller_changes(self, changed_pots):  # Renamed from process_pot_changes
+    def process_controller_changes(self, changed_pots):
         """Process controller changes and generate MIDI events"""
         midi_events = []
         for pot_index, old_value, new_value in changed_pots:
-            controller_number = self.controller_config.get_controller_for_pot(pot_index)  # Updated method name
+            controller_number = self.controller_config.get_controller_for_pot(pot_index)
             midi_value = int(new_value * 127)
             midi_events.append(('control_change', controller_number, midi_value))
             if Constants.DEBUG:
@@ -411,7 +442,7 @@ class MidiEventRouter:
         self.message_sender = message_sender
         self.channel_manager = channel_manager
 
-    def handle_event(self, event):  # Renamed from route_event to match Candide style
+    def handle_event(self, event):
         """Handle a MIDI event"""
         event_type = event[0]
         params = event[1:]
@@ -502,7 +533,7 @@ class MidiLogic:
         self.message_sender = MidiMessageSender(self.transport)
         
         # Initialize managers and processors
-        self.channel_manager = ZoneManager()  # Updated to new name
+        self.channel_manager = ZoneManager()
         self.note_processor = MPENoteProcessor(self.channel_manager)
         self.control_processor = MidiControlProcessor()
         
@@ -525,7 +556,7 @@ class MidiLogic:
     def handle_config_message(self, message):
         return self.control_processor.handle_config_message(message)
 
-    def reset_controller_defaults(self):  # Renamed from reset_cc_defaults
+    def reset_controller_defaults(self):
         self.control_processor.reset_to_defaults()
 
     def update(self, changed_keys, changed_pots, config):
@@ -535,10 +566,10 @@ class MidiLogic:
             midi_events.extend(self.note_processor.process_key_changes(changed_keys, config))
         
         if changed_pots:
-            midi_events.extend(self.control_processor.process_controller_changes(changed_pots))  # Updated method name
+            midi_events.extend(self.control_processor.process_controller_changes(changed_pots))
         
         for event in midi_events:
-            self.event_router.handle_event(event)  # Updated method name
+            self.event_router.handle_event(event)
             
         return midi_events
 
