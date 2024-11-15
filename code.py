@@ -1,6 +1,5 @@
 import board
 import busio
-import usb_midi
 import digitalio
 import time
 from hardware import (
@@ -12,7 +11,7 @@ from midi import MidiLogic
 class Constants:
     # Debug Settings
     DEBUG = True
-    SEE_HEARTBEAT = True
+    SEE_HEARTBEAT = False
     
     # Hardware Setup
     SETUP_DELAY = 0.1
@@ -23,25 +22,33 @@ class Constants:
     
     # Connection
     DETECT_PIN = board.GP22
+    CONFIG_REQUEST_TIMEOUT = 1.0
     CONNECTION_TIMEOUT = 2.0
+    
+    # New Connection Constants
+    STARTUP_DELAY = 1.0  # Give devices time to initialize
+    RETRY_DELAY = 0.25   # Delay between connection attempts
+    ERROR_RECOVERY_DELAY = 0.5  # Delay after errors before retry
+    BUFFER_CLEAR_TIMEOUT = 0.1  # Time to wait for buffer clearing
+    MAX_CONFIG_RETRIES = 3
     
     # Timing Intervals
     POT_SCAN_INTERVAL = 0.02
     ENCODER_SCAN_INTERVAL = 0.001
     MAIN_LOOP_INTERVAL = 0.001
+    MESSAGE_TIMEOUT = 0.05
 
     # Message Types
     MSG_HELLO = "hello"
     MSG_CONFIG = "cc:"
-    MSG_HEARTBEAT = "♡"
-
-    # Timing Constants
-    CONFIG_REQUEST_TIMEOUT = 1.0
-    CONNECTION_TIMEOUT = 1.0
     
-    # UART Settings
+    # MIDI Settings
     UART_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
+    
+    # MIDI CC for Handshake
+    HANDSHAKE_CC = 119  # Undefined CC number
+    HANDSHAKE_VALUE = 42  # Arbitrary value
 
 class TransportManager:
     """Manages shared UART instance for both text and MIDI communication"""
@@ -56,54 +63,223 @@ class TransportManager:
             parity=None,
             stop=1
         )
-        
-        # Initialize USB MIDI port
-        try:
-            self.usb_midi = usb_midi.ports[1]
-            print("USB MIDI initialized")
-        except Exception as e:
-            print(f"USB MIDI initialization error: {str(e)}")
-            self.usb_midi = None
-            
+        self.uart_initialized = True
         print("Transport initialized")
         
     def get_uart(self):
         """Get the UART instance for text or MIDI use"""
         return self.uart
         
-    def get_usb_midi(self):
-        """Get the USB MIDI port"""
-        return self.usb_midi
+    def flush_buffers(self):
+        """Clear any pending data in UART buffers"""
+        if not self.uart_initialized:
+            return
+        try:
+            start_time = time.monotonic()
+            while (time.monotonic() - start_time) < Constants.BUFFER_CLEAR_TIMEOUT:
+                if self.uart and self.uart.in_waiting:
+                    self.uart.read()
+                else:
+                    break
+        except Exception:
+            # If we hit an error trying to flush, the UART is likely already deinitialized
+            pass
         
     def cleanup(self):
         """Clean shutdown of transport"""
-        if self.uart:
-            self.uart.deinit()
+        if self.uart_initialized:
+            try:
+                self.flush_buffers()
+                if self.uart:
+                    self.uart.deinit()
+            except Exception:
+                # If we hit an error, the UART is likely already deinitialized
+                pass
+            finally:
+                self.uart = None
+                self.uart_initialized = False
 
 class TextUart:
-    """Handles text-based UART communication, separate from MIDI"""
+    """Handles text-based UART communication for receiving config only"""
     def __init__(self, uart):
         self.uart = uart
+        self.buffer = bytearray()
+        self.last_write = 0
         print("Text protocol initialized")
 
     def write(self, message):
-        """Write text message, converting to bytes if needed"""
+        """Write text message with minimum delay between writes"""
+        current_time = time.monotonic()
+        delay_needed = Constants.MESSAGE_TIMEOUT - (current_time - self.last_write)
+        if delay_needed > 0:
+            time.sleep(delay_needed)
+            
         if isinstance(message, str):
             message = message.encode('utf-8')
-        return self.uart.write(message)
+        result = self.uart.write(message)
+        self.last_write = time.monotonic()
+        return result
 
-    def read(self, size=None):
-        """Read available data"""
-        if size is None and self.uart.in_waiting:
-            size = self.uart.in_waiting
-        if size:
-            return self.uart.read(size)
+    def read(self):
+        """Read available data and return complete messages"""
+        while self.uart.in_waiting:
+            data = self.uart.read(1)
+            if data:
+                self.buffer.extend(data)
+                if b'\n' in self.buffer:
+                    message, self.buffer = self.buffer.split(b'\n', 1)
+                    return message.decode('utf-8').strip()
         return None
+
+    def clear_buffer(self):
+        """Clear the internal buffer"""
+        self.buffer = bytearray()
 
     @property
     def in_waiting(self):
-        """Number of bytes waiting to be read"""
-        return self.uart.in_waiting
+        try:
+            return self.uart.in_waiting
+        except Exception:
+            return 0
+
+class BartlebyConnectionManager:
+    """
+    Handles the connection and handshake protocol for Bartleby (Host).
+    Uses text UART for receiving config, MIDI for all other communication.
+    """
+    STANDALONE = 0
+    CONFIGURING = 1
+    CONNECTED = 2
+
+    def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager, detect_pin):
+        self.uart = text_uart
+        self.hardware = hardware_coordinator
+        self.midi = midi_logic
+        self.transport = transport_manager
+        self.detect_pin = detect_pin
+        
+        # Initialize state
+        self.state = self.STANDALONE
+        self.last_message_time = 0
+        self.config_received = False
+        self.config_request_attempts = 0
+        self.last_config_request = 0
+        
+        print(f"Bartleby connection manager initialized - listening for Candide")
+        
+    def update_state(self):
+        """Main update loop with improved error handling"""
+        current_time = time.monotonic()
+        
+        # Check for timeout in intermediate states
+        if self.state != self.STANDALONE:
+            if current_time - self.last_message_time > Constants.CONNECTION_TIMEOUT:
+                print("Connection timeout - returning to listening state")
+                self._handle_error()
+    
+    def handle_message(self, message):
+        """Process incoming messages with improved state handling"""
+        if not message:
+            return
+                
+        self.last_message_time = time.monotonic()
+                
+        # Only accept hello in STANDALONE state
+        if self.state == self.STANDALONE and message.startswith("hello"):
+            print("---------------")
+            print("HANDSHAKE STEP 1: Hello received from Candide")
+            print("HANDSHAKE STEP 2: Sending handshake CC...")
+            print("---------------")
+            self.state = self.CONFIGURING
+            self._send_handshake_cc()
+            return
+                
+        # Handle config in CONFIGURING state
+        if self.state == self.CONFIGURING and message.startswith("cc:"):
+            print("---------------")
+            print("HANDSHAKE STEP 3: Config received from Candide")
+            print("HANDSHAKE STEP 4: Moving to connected state")
+            print("---------------")
+            self.config_received = True
+            self.state = self.CONNECTED
+            self._send_current_hw_state()
+            self._send_welcome()
+            self.midi.play_greeting()
+                
+    def _send_current_hw_state(self):
+        """Send current hardware state as MIDI messages"""
+        try:
+            # Create a temporary state manager just for this read
+            temp_state_manager = StateManager()
+            temp_state_manager.update_time()
+            
+            # Read current hardware state
+            state = self.hardware.read_hardware_state(temp_state_manager)
+            
+            # Send pot values as MIDI CC messages
+            if state['pots']:
+                self.midi.update([], state['pots'], {})
+                print(f"Sent current pot values via MIDI")
+            
+            # Send encoder position
+            encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)
+            print(f"Current octave position: {encoder_pos}")
+            
+            # Apply any necessary octave shift
+            if encoder_pos != 0:
+                self.midi.handle_octave_shift(encoder_pos)
+            
+        except Exception as e:
+            print(f"Failed to send current state: {str(e)}")
+                
+    def _send_handshake_cc(self):
+        """Send handshake CC message"""
+        try:
+            # Build message first
+            message = [0xB0, Constants.HANDSHAKE_CC, Constants.HANDSHAKE_VALUE]
+            # Log it
+            print(f"Sending handshake CC: {[hex(b) for b in message]}")
+            # Then send it
+            self.midi.message_sender.send_message(message)
+            print("Handshake CC sent")
+        except Exception as e:
+            print(f"Failed to send handshake CC: {str(e)}")
+            self._handle_error()
+            
+    def _send_welcome(self):
+        """Send welcome confirmation via MIDI CC"""
+        try:
+            if Constants.DEBUG:
+                print("DEBUG: Sending welcome CC...")
+            # Send welcome as a MIDI CC message
+            self.midi.message_sender.send_message([0xB0, Constants.HANDSHAKE_CC, Constants.HANDSHAKE_VALUE + 1])
+        except Exception as e:
+            print(f"Failed to send welcome: {str(e)}")
+            self._handle_error()
+            
+    def _handle_error(self):
+        """Handle errors with proper cleanup and delay"""
+        print("Error occurred - cleaning up connection")
+        self.transport.flush_buffers()
+        self.uart.clear_buffer()
+        time.sleep(Constants.ERROR_RECOVERY_DELAY)
+        self._reset_state()
+            
+    def _reset_state(self):
+        """Reset to initial state with cleanup"""
+        self.state = self.STANDALONE
+        self.config_received = False
+        self.last_message_time = 0
+        self.config_request_attempts = 0
+        self.last_config_request = 0
+
+    def cleanup(self):
+        """Clean up resources"""
+        self._reset_state()
+
+    def is_connected(self):
+        """Check if currently in connected state"""
+        return self.state == self.CONNECTED
 
 class StateManager:
     def __init__(self):
@@ -126,143 +302,15 @@ class StateManager:
     def update_encoder_scan_time(self):
         self.last_encoder_scan = self.current_time
 
-class BartlebyConnectionManager:
-    """
-    Handles the connection and handshake protocol for Bartleby (Host).
-    Uses text UART for communication, separate from MIDI.
-    
-    State Machine:
-    1. STANDALONE -> Always listening for hello
-    2. CONFIGURING -> Hello received, requesting/awaiting config
-    3. CONNECTED -> Config received, monitoring heartbeats
-    """
-    STANDALONE = 0
-    CONFIGURING = 1
-    CONNECTED = 2
-
-    def __init__(self, text_uart, hardware_coordinator, midi_logic):
-        # Setup communication
-        self.uart = text_uart
-        self.hardware = hardware_coordinator
-        self.midi = midi_logic  # Only used when we need to send MIDI data
-        
-        # Initialize state
-        self.state = self.STANDALONE
-        self.last_message_time = 0
-        self.config_received = False
-        
-        print(f"Bartleby connection manager initialized - listening for Candide")
-        
-    def update_state(self):
-        """Main update loop - check timeouts"""
-        if self.state != self.STANDALONE:
-            if time.monotonic() - self.last_message_time > Constants.CONNECTION_TIMEOUT:
-                print("Connection timeout - returning to listening state")
-                self._reset_state()
-    
-    def handle_message(self, message):
-        """Process incoming messages based on current state"""
-        if not message:
-            return
-            
-        # Always accept hello in any state - Candide might restart
-        if message.startswith("hello"):
-            print("---------------")
-            print("HANDSHAKE STEP 1: Hello received from Candide")
-            print("HANDSHAKE STEP 2: Requesting config and sending current state...")
-            print("---------------")
-            self.state = self.CONFIGURING
-            self._send_current_hw_state()
-            self._request_config()
-            self.last_message_time = time.monotonic()
-            return
-            
-        # Handle state-specific messages
-        if self.state == self.CONFIGURING and message.startswith("cc:"):
-            print("---------------")
-            print("HANDSHAKE STEP 3: Config received from Candide")
-            print("HANDSHAKE STEP 4: Moving to connected state")
-            print("---------------")
-            self.config_received = True
-            self.state = self.CONNECTED
-            self._send_welcome()
-            self.last_message_time = time.monotonic()
-            
-        elif self.state == self.CONNECTED:
-            if message == "heartbeat":
-                self.last_message_time = time.monotonic()
-                
-    def _send_current_hw_state(self):
-        """Send current hardware state as MIDI messages"""
-        try:
-            # Create a temporary state manager just for this read
-            temp_state_manager = StateManager()
-            temp_state_manager.update_time()
-            
-            # Read current hardware state
-            state = self.hardware.read_hardware_state(temp_state_manager)
-            
-            # Send pot values as MIDI CC messages
-            if state['pots']:
-                # This is where we explicitly use MIDI
-                self.midi.update([], state['pots'], {})
-                print(f"Sent current pot values via MIDI")
-            
-            # Send encoder position
-            encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)
-            print(f"Current octave position: {encoder_pos}")
-            
-            # Apply any necessary octave shift based on encoder position
-            if encoder_pos != 0:
-                self.midi.handle_octave_shift(encoder_pos)
-            
-        except Exception as e:
-            print(f"Failed to send current state: {str(e)}")
-                
-    def _request_config(self):
-        """Request configuration from Candide"""
-        try:
-            if Constants.DEBUG:
-                print("DEBUG: Sending config request...")
-            self.uart.write("request_config\n")
-        except Exception as e:
-            print(f"Failed to request config: {str(e)}")
-            
-    def _send_welcome(self):
-        """Send welcome confirmation to Candide"""
-        try:
-            if Constants.DEBUG:
-                print("DEBUG: Sending welcome message...")
-            self.uart.write("welcome\n")
-        except Exception as e:
-            print(f"Failed to send welcome: {str(e)}")
-            
-    def _reset_state(self):
-        """Return to listening state"""
-        self.state = self.STANDALONE
-        self.config_received = False
-        self.last_message_time = 0
-        # Clear any pending messages
-        while self.uart.in_waiting:
-            self.uart.read()
-
-    def cleanup(self):
-        """Clean up any resources"""
-        self._reset_state()
-
-    def is_connected(self):
-        """Check if currently in connected state"""
-        return self.state == self.CONNECTED
-
 class HardwareCoordinator:
     def __init__(self):
         print("Setting up hardware...")
-        # Set up detect pin as output HIGH to signal presence to Candide
-        self.detect_pin = digitalio.DigitalInOut(Constants.DETECT_PIN)  # GP22
+        # Set up detect pin as output HIGH to signal presence
+        self.detect_pin = digitalio.DigitalInOut(Constants.DETECT_PIN)
         self.detect_pin.direction = digitalio.Direction.OUTPUT
         self.detect_pin.value = True
         
-        # Initialize other components
+        # Initialize components
         self.components = self._initialize_components()
         time.sleep(Constants.SETUP_DELAY)
         
@@ -372,13 +420,18 @@ class Bartleby:
             midi_callback=self._handle_midi_config
         )
         
-        # Rest of initialization
+        # Initialize hardware first to set up detect pin
         self.hardware = HardwareCoordinator()
+        
+        # Initialize connection manager with hardware's detect pin
         self.connection_manager = BartlebyConnectionManager(
-            self.text_uart, 
+            self.text_uart,
             self.hardware,
-            self.midi
+            self.midi,
+            self.transport,
+            self.hardware.detect_pin  # Pass the already initialized detect pin
         )
+        
         self._setup_initial_state()
 
     def _handle_midi_config(self, message):
@@ -386,6 +439,8 @@ class Bartleby:
 
     def _setup_initial_state(self):
         self.hardware.reset_encoders()
+        # Add startup delay to ensure both sides are ready
+        time.sleep(Constants.STARTUP_DELAY)
         print("\nBartleby (v1.0) is awake... (◕‿◕✿)")
 
     def update(self):
@@ -401,35 +456,25 @@ class Bartleby:
             
             # Check for text messages
             if self.text_uart.in_waiting:
-                new_bytes = self.text_uart.read()
-                if new_bytes:
+                message = self.text_uart.read()
+                if message:
                     try:
-                        message = new_bytes.decode('utf-8').strip()  # Decode byte sequence to UTF-8 string
-                        if message:  # Only process non-empty messages
-                            if Constants.DEBUG:
-                                if message == Constants.MSG_HEARTBEAT:
-                                    if Constants.SEE_HEARTBEAT:
-                                        print("♡")
-                                else:
-                                    print(f"DEBUG: Received message: '{message}'")
-                            self.connection_manager.handle_message(message)
-                        elif Constants.DEBUG:
-                            # Only print empty messages if we're in deep debug
-                            print("DEBUG: Received empty UART data")
+                        if Constants.DEBUG:
+                            print(f"DEBUG: Received message: '{message}'")
+                        self.connection_manager.handle_message(message)
                     except Exception as e:
                         if str(e):
-                            print(f"Received non-text data: {new_bytes.hex()}")
+                            print(f"Received non-text data: {message}")
 
             # Handle encoder events and MIDI updates
             if changes['encoders']:
                 self.hardware.handle_encoder_events(changes['encoders'], self.midi)
             
-            if any(changes.values()):
-                self.midi.update(
-                    changes['keys'],
-                    changes['pots'],
-                    {}  # Empty config since we're not using instrument settings
-                )
+            self.midi.update(
+                changes['keys'],
+                changes['pots'],
+                {}  # Empty config since we're not using instrument settings
+            )
             
             return True
                 
@@ -448,25 +493,51 @@ class Bartleby:
             self.cleanup()
 
     def cleanup(self):
+        print("Starting cleanup sequence...")
+        if hasattr(self.hardware, 'detect_pin'):
+            print("Cleaning up hardware...")
+            self.hardware.detect_pin.value = False
+            self.hardware.detect_pin.deinit()
+        if self.connection_manager:
+            self.connection_manager.cleanup()
         if self.midi:
             print("Cleaning up MIDI...")
             self.midi.cleanup()
         if self.transport:
             print("Cleaning up transport...")
             self.transport.cleanup()
-        if hasattr(self.hardware, 'detect_pin'):
-            print("Cleaning up hardware...")
-            self.hardware.detect_pin.value = False
-            self.hardware.detect_pin.deinit()
-        self.connection_manager.cleanup()
         print("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁")
 
-def main():
-    controller = Bartleby()
-    controller.run()
-
-if __name__ == "__main__":
-    main()
+    def play_greeting(self):
+        """Play greeting chime using MPE"""
+        if Constants.DEBUG:
+            print("Playing MPE greeting sequence")
+            
+        base_key_id = -1
+        base_pressure = 0.75
+        
+        greeting_notes = [60, 64, 67, 72]
+        velocities = [0.6, 0.7, 0.8, 0.9]
+        durations = [0.2, 0.2, 0.2, 0.4]
+        
+        for idx, (note, velocity, duration) in enumerate(zip(greeting_notes, velocities, durations)):
+            key_id = base_key_id - idx
+            channel = self.midi.channel_manager.allocate_channel(key_id)
+            note_state = self.midi.channel_manager.add_note(key_id, note, channel, int(velocity * 127))
+            
+            # Send in MPE order: CC74 → Pressure → Pitch Bend → Note On
+            self.midi.message_sender.send_message([0xB0 | channel, Constants.CC_TIMBRE, Constants.TIMBRE_CENTER])
+            self.midi.message_sender.send_message([0xD0 | channel, int(base_pressure * 127)])
+            self.midi.message_sender.send_message([0xE0 | channel, 0x00, 0x40])  # Center pitch bend
+            self.midi.message_sender.send_message([0x90 | channel, note, int(velocity * 127)])
+            
+            time.sleep(duration)
+            
+            self.midi.message_sender.send_message([0xD0 | channel, 0])  # Zero pressure
+            self.midi.message_sender.send_message([0x80 | channel, note, 0])
+            self.midi.channel_manager.release_note(key_id)
+            
+            time.sleep(0.05)
 
 def main():
     controller = Bartleby()

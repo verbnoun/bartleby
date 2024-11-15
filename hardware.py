@@ -6,7 +6,7 @@ import analogio
 
 class Constants:
     # Debug Settings
-    DEBUG = False
+    DEBUG = True
     POT_LOG_THRESHOLD = 0.01
     
     # ADC Constants

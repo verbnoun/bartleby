@@ -1,10 +1,9 @@
 import time
-import usb_midi
 import busio
 from collections import deque
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -65,19 +64,17 @@ class MidiTransportManager:
     """Manages MIDI output streams using shared transport"""
     def __init__(self, transport_manager, midi_callback=None):
         self.uart = transport_manager.get_uart()
-        self.usb_midi = transport_manager.get_usb_midi()
         self.midi_callback = midi_callback
+        self.uart_initialized = True
         print("MIDI transport initialized")
 
     def send_message(self, message):
-        """Send MIDI message to both UART and USB outputs"""
+        """Send MIDI message to UART output"""
         try:
             if isinstance(message, (bytes, bytearray)):
                 self.uart.write(message)
             else:
                 self.uart.write(bytes(message))
-            if self.usb_midi:
-                self.usb_midi.write(bytes(message))
         except Exception as e:
             print(f"Error sending MIDI message: {str(e)}")
 
@@ -89,6 +86,13 @@ class MidiTransportManager:
     def in_waiting(self):
         """Check bytes waiting"""
         return self.uart.in_waiting
+
+    def cleanup(self):
+        """Clean shutdown of MIDI transport"""
+        if self.uart and self.uart_initialized:
+            self.uart.deinit()
+            self.uart_initialized = False
+        print("MIDI transport cleaned up")
 
 class ControllerManager:  # Renamed from CCConfigManager for clarity
     """Manages controller assignments and configuration for pots"""
@@ -375,54 +379,16 @@ class MidiMessageSender:
     """Handles the actual sending of MIDI messages"""
     def __init__(self, transport):
         self.transport = transport
-        self.ready_for_midi = False
 
     def send_message(self, message):
-        """Send a MIDI message if the system is ready or it's a system message"""
-        if self.ready_for_midi or message[0] & 0xF0 in (0xB0, 0xF0) or not self.ready_for_midi:
-            self.transport.send_message(message)
-
-    def set_ready(self, ready):
-        self.ready_for_midi = ready
-        if Constants.DEBUG and ready:
-            print("MIDI message sender ready")
+        """Send a MIDI message directly"""
+        self.transport.send_message(message)
 
 class MidiSystemInitializer:
     """Handles system initialization and greeting sequence"""
     def __init__(self, message_sender, channel_manager):
         self.message_sender = message_sender
         self.channel_manager = channel_manager
-
-    def play_greeting(self):
-        """Play greeting chime using MPE"""
-        if Constants.DEBUG:
-            print("Playing MPE greeting sequence")
-            
-        base_key_id = -1
-        base_pressure = 0.75
-        
-        greeting_notes = [60, 64, 67, 72]
-        velocities = [0.6, 0.7, 0.8, 0.9]
-        durations = [0.2, 0.2, 0.2, 0.4]
-        
-        for idx, (note, velocity, duration) in enumerate(zip(greeting_notes, velocities, durations)):
-            key_id = base_key_id - idx
-            channel = self.channel_manager.allocate_channel(key_id)
-            note_state = self.channel_manager.add_note(key_id, note, channel, int(velocity * 127))
-            
-            # Send in MPE order: CC74 → Pressure → Pitch Bend → Note On
-            self.message_sender.send_message([0xB0 | channel, Constants.CC_TIMBRE, Constants.TIMBRE_CENTER])
-            self.message_sender.send_message([0xD0 | channel, int(base_pressure * 127)])
-            self.message_sender.send_message([0xE0 | channel, 0x00, 0x40])  # Center pitch bend
-            self.message_sender.send_message([0x90 | channel, note, int(velocity * 127)])
-            
-            time.sleep(duration)
-            
-            self.message_sender.send_message([0xD0 | channel, 0])  # Zero pressure
-            self.message_sender.send_message([0x80 | channel, note, 0])
-            self.channel_manager.release_note(key_id)
-            
-            time.sleep(0.05)
 
 class MidiEventRouter:
     """Routes and processes MIDI events"""
@@ -432,9 +398,6 @@ class MidiEventRouter:
 
     def handle_event(self, event):  # Renamed from route_event to match Candide style
         """Handle a MIDI event"""
-        if not self.message_sender.ready_for_midi:
-            return
-            
         event_type = event[0]
         params = event[1:]
         
@@ -541,8 +504,6 @@ class MidiLogic:
         if Constants.DEBUG:
             print("\nInitializing MIDI system...")
         self.mpe_configurator.configure_mpe()
-        self.system_initializer.play_greeting()
-        self.message_sender.set_ready(True)
         if Constants.DEBUG:
             print("MIDI system initialization complete")
 
@@ -553,9 +514,6 @@ class MidiLogic:
         self.control_processor.reset_to_defaults()
 
     def update(self, changed_keys, changed_pots, config):
-        if not self.message_sender.ready_for_midi:
-            return []
-            
         midi_events = []
         
         if changed_keys:
@@ -570,8 +528,6 @@ class MidiLogic:
         return midi_events
 
     def handle_octave_shift(self, direction):
-        if not self.message_sender.ready_for_midi:
-            return []
         return self.note_processor.handle_octave_shift(direction)
 
     def reset_cc_defaults(self):
