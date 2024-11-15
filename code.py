@@ -10,8 +10,8 @@ from midi import MidiLogic
 
 class Constants:
     # Debug Settings
-    DEBUG = True
-    SEE_HEARTBEAT = True
+    DEBUG = False
+    SEE_HEARTBEAT = False
     
     # Hardware Setup
     SETUP_DELAY = 0.1

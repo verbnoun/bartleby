@@ -1,5 +1,6 @@
 import time
 import busio
+import adafruit_midi
 from collections import deque
 
 class Constants:
@@ -155,7 +156,8 @@ class NoteState:
 class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
     def __init__(self):
         self.active_notes = {}
-        self.channel_notes = {}  # NEW: channel to set of key_ids mapping
+        self.channel_notes = {}  # channel to set of key_ids mapping
+        self.pending_channels = {}  # NEW: Store pending channel allocations
         self.available_channels = list(range(
             Constants.ZONE_START, 
             Constants.ZONE_END + 1
@@ -163,18 +165,23 @@ class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
 
     def allocate_channel(self, key_id):
         """Get next available channel using robust allocation strategy"""
-        # 1. Check if note already has an active channel
+        # Check pending allocation first
+        if key_id in self.pending_channels:
+            return self.pending_channels[key_id]
+            
+        # Check if note already has an active channel
         if key_id in self.active_notes and self.active_notes[key_id].active:
             return self.active_notes[key_id].channel
 
-        # 2. Find completely free channel first
+        # Find completely free channel first
         for channel in self.available_channels:
             if channel not in self.channel_notes or not self.channel_notes[channel]:
                 if Constants.DEBUG:
                     print(f"Allocated free channel {channel} for key {key_id}")
+                self.pending_channels[key_id] = channel
                 return channel
 
-        # 3. If no free channels, find channel with fewest active notes
+        # If no free channels, find channel with fewest active notes
         min_notes = float('inf')
         best_channel = None
         
@@ -187,11 +194,13 @@ class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
         if best_channel is not None:
             if Constants.DEBUG:
                 print(f"Allocated least used channel {best_channel} for key {key_id}")
+            self.pending_channels[key_id] = best_channel
             return best_channel
 
-        # 4. Fallback to first channel if all else fails
+        # Fallback to first channel if all else fails
         if Constants.DEBUG:
             print(f"No optimal channels available, using first MPE channel for key {key_id}")
+        self.pending_channels[key_id] = Constants.ZONE_START
         return Constants.ZONE_START
 
     def add_note(self, key_id, midi_note, channel, velocity):
@@ -203,6 +212,9 @@ class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
         if channel not in self.channel_notes:
             self.channel_notes[channel] = set()
         self.channel_notes[channel].add(key_id)
+        
+        # Clear pending allocation
+        self.pending_channels.pop(key_id, None)
         
         if Constants.DEBUG:
             print(f"Added note: key={key_id}, note={midi_note}, channel={channel}, velocity={velocity}")
@@ -220,6 +232,9 @@ class ZoneManager:  # Renamed from MPEChannelManager to align with Candide
                 self.channel_notes[channel].discard(key_id)
                 if Constants.DEBUG:
                     print(f"Released channel {channel} from key {key_id}")
+                    
+            # Clear any pending allocation
+            self.pending_channels.pop(key_id, None)
 
     def release_note(self, key_id):
         self._release_note(key_id)
