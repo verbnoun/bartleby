@@ -482,3 +482,24 @@ class PotentiometerHandler:
                         print(f"\nPot {i}: {self.last_normalized_values[i]:.3f} -> {normalized_new:.3f}")
                 
         return changed_pots
+
+    def read_all_pots(self):
+        """Read all potentiometers and return their current normalized values"""
+        all_pots = []
+        for i in range(Constants.NUM_POTS):
+            raw_value = self.multiplexer.read_channel(i)
+            normalized_value = self.normalize_value(raw_value)
+            
+            # Update last values to ensure subsequent read_pots() works correctly
+            self.last_reported_values[i] = raw_value
+            self.last_normalized_values[i] = normalized_value
+            
+            # Mark as active to prevent filtering out in subsequent read_pots()
+            self.is_active[i] = True
+            
+            all_pots.append((i, normalized_value))
+            
+            if Constants.DEBUG:
+                print(f"Initial Pot {i}: {normalized_value:.3f}")
+        
+        return all_pots
