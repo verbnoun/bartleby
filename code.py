@@ -11,7 +11,7 @@ from midi import MidiLogic
 class Constants:
     # Debug Settings
     DEBUG = True
-    SEE_HEARTBEAT = False
+    SEE_HEARTBEAT = True
     
     # Hardware Setup
     SETUP_DELAY = 0.1
@@ -22,8 +22,7 @@ class Constants:
     
     # Connection
     DETECT_PIN = board.GP22
-    CONFIG_REQUEST_TIMEOUT = 1.0
-    CONNECTION_TIMEOUT = 2.0
+    COMMUNICATION_TIMEOUT = 2.0
     
     # New Connection Constants
     STARTUP_DELAY = 1.0  # Give devices time to initialize
@@ -144,141 +143,113 @@ class TextUart:
 
 class BartlebyConnectionManager:
     """
-    Handles the connection and handshake protocol for Bartleby (Host).
-    Uses text UART for receiving config, MIDI for all other communication.
+    Manages connection state and handshake protocol for Bartleby (Base Station).
+    Receives text messages, sends MIDI responses.
     """
-    STANDALONE = 0
-    CONFIGURING = 1
-    CONNECTED = 2
-
-    def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager, detect_pin):
+    # States
+    STANDALONE = 0      # No active client
+    HANDSHAKING = 1     # In handshake process
+    CONNECTED = 2       # Fully connected and operational
+    
+    def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager):
         self.uart = text_uart
         self.hardware = hardware_coordinator
         self.midi = midi_logic
         self.transport = transport_manager
-        self.detect_pin = detect_pin
         
-        # Initialize state
+        # Connection state
         self.state = self.STANDALONE
         self.last_message_time = 0
         self.config_received = False
-        self.config_request_attempts = 0
-        self.last_config_request = 0
         
-        print(f"Bartleby connection manager initialized - listening for Candide")
+        print("Bartleby connection manager initialized - listening for Candide")
         
     def update_state(self):
-        """Main update loop with improved error handling"""
-        current_time = time.monotonic()
-        
-        # Check for timeout in intermediate states
+        """Check for timeouts and manage state transitions"""
         if self.state != self.STANDALONE:
-            if current_time - self.last_message_time > Constants.CONNECTION_TIMEOUT:
-                print("Connection timeout - returning to listening state")
-                self._handle_error()
-    
+            current_time = time.monotonic()
+            if current_time - self.last_message_time > Constants.COMMUNICATION_TIMEOUT:
+                print("Communication timeout - returning to standalone")
+                self._reset_state()
+                
     def handle_message(self, message):
-        """Process incoming messages with improved state handling"""
+        """Process incoming text messages"""
         if not message:
             return
-                
+            
+        # Update last message time for timeout tracking
         self.last_message_time = time.monotonic()
-                
-        # Only accept hello in STANDALONE state
-        if self.state == self.STANDALONE and message.startswith("hello"):
-            print("---------------")
-            print("HANDSHAKE STEP 1: Hello received from Candide")
-            print("HANDSHAKE STEP 2: Sending handshake CC...")
-            print("---------------")
-            self.state = self.CONFIGURING
-            self._send_handshake_cc()
+        
+        # Handle hello message
+        if message.startswith("hello"):
+            if self.state == self.STANDALONE:
+                print("Hello received - starting handshake")
+                self.transport.flush_buffers()
+                self.state = self.HANDSHAKING
+                self._send_handshake_cc()
             return
-                
-        # Handle config in CONFIGURING state
-        if self.state == self.CONFIGURING and message.startswith("cc:"):
-            print("---------------")
-            print("HANDSHAKE STEP 3: Config received from Candide")
-            print("HANDSHAKE STEP 4: Moving to connected state")
-            print("---------------")
+            
+        # Handle config message
+        if self.state == self.HANDSHAKING and message.startswith("cc:"):
+            print("Config received - connection established")
             self.config_received = True
             self.state = self.CONNECTED
             self._send_current_hw_state()
-            self._send_welcome()
-            self.midi.play_greeting()
-                
-    def _send_current_hw_state(self):
-        """Send current hardware state as MIDI messages"""
-        try:
-            # Create a temporary state manager just for this read
-            temp_state_manager = StateManager()
-            temp_state_manager.update_time()
+            return
             
-            # Read current hardware state
-            state = self.hardware.read_hardware_state(temp_state_manager)
+        # Handle heartbeat in connected state
+        if self.state == self.CONNECTED and message.startswith("♥︎"):
+            if Constants.SEE_HEARTBEAT and Constants.DEBUG:
+                print(f"♥︎")
+            return  # Just update last_message_time
             
-            # Send pot values as MIDI CC messages
-            if state['pots']:
-                self.midi.update([], state['pots'], {})
-                print(f"Sent current pot values via MIDI")
-            
-            # Send encoder position
-            encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)
-            print(f"Current octave position: {encoder_pos}")
-            
-            # Apply any necessary octave shift
-            if encoder_pos != 0:
-                self.midi.handle_octave_shift(encoder_pos)
-            
-        except Exception as e:
-            print(f"Failed to send current state: {str(e)}")
-                
     def _send_handshake_cc(self):
         """Send handshake CC message"""
         try:
-            # Build message first
             message = [0xB0, Constants.HANDSHAKE_CC, Constants.HANDSHAKE_VALUE]
-            # Log it
-            print(f"Sending handshake CC: {[hex(b) for b in message]}")
-            # Then send it
             self.midi.message_sender.send_message(message)
             print("Handshake CC sent")
         except Exception as e:
             print(f"Failed to send handshake CC: {str(e)}")
-            self._handle_error()
+            self._reset_state()
             
-    def _send_welcome(self):
-        """Send welcome confirmation via MIDI CC"""
+    def _send_current_hw_state(self):
+        """Send current hardware state as MIDI messages"""
         try:
-            if Constants.DEBUG:
-                print("DEBUG: Sending welcome CC...")
-            # Send welcome as a MIDI CC message
-            self.midi.message_sender.send_message([0xB0, Constants.HANDSHAKE_CC, Constants.HANDSHAKE_VALUE + 1])
-        except Exception as e:
-            print(f"Failed to send welcome: {str(e)}")
-            self._handle_error()
+            # Create a temporary state manager for hardware read
+            temp_state_manager = StateManager()
+            temp_state_manager.update_time()
             
-    def _handle_error(self):
-        """Handle errors with proper cleanup and delay"""
-        print("Error occurred - cleaning up connection")
-        self.transport.flush_buffers()
-        self.uart.clear_buffer()
-        time.sleep(Constants.ERROR_RECOVERY_DELAY)
-        self._reset_state()
+            # Read and send current hardware state
+            state = self.hardware.read_hardware_state(temp_state_manager)
+            
+            # Send pot values
+            if state['pots']:
+                self.midi.update([], state['pots'], {})
+                print("Current pot values sent")
+            
+            # Send encoder position
+            encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)
+            if encoder_pos != 0:
+                self.midi.handle_octave_shift(encoder_pos)
+                print(f"Current octave position sent: {encoder_pos}")
+                
+        except Exception as e:
+            print(f"Failed to send hardware state: {str(e)}")
             
     def _reset_state(self):
-        """Reset to initial state with cleanup"""
+        """Reset to initial state"""
         self.state = self.STANDALONE
         self.config_received = False
         self.last_message_time = 0
-        self.config_request_attempts = 0
-        self.last_config_request = 0
-
+        self.transport.flush_buffers()
+        
     def cleanup(self):
         """Clean up resources"""
         self._reset_state()
-
+        
     def is_connected(self):
-        """Check if currently in connected state"""
+        """Check if fully connected"""
         return self.state == self.CONNECTED
 
 class StateManager:
@@ -428,8 +399,7 @@ class Bartleby:
             self.text_uart,
             self.hardware,
             self.midi,
-            self.transport,
-            self.hardware.detect_pin  # Pass the already initialized detect pin
+            self.transport
         )
         
         self._setup_initial_state()
@@ -454,12 +424,12 @@ class Bartleby:
             # Process hardware and MIDI
             changes = self.hardware.read_hardware_state(self.state_manager)
             
-            # Check for text messages
+            # In Bartleby.update():
             if self.text_uart.in_waiting:
                 message = self.text_uart.read()
                 if message:
                     try:
-                        if Constants.DEBUG:
+                        if Constants.DEBUG and not message.startswith('♥︎'):
                             print(f"DEBUG: Received message: '{message}'")
                         self.connection_manager.handle_message(message)
                     except Exception as e:
