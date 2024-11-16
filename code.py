@@ -10,7 +10,7 @@ from midi import MidiLogic
 
 class Constants:
     # Debug Settings
-    DEBUG = False
+    DEBUG = True
     SEE_HEARTBEAT = False
     
     # Hardware Setup
@@ -468,7 +468,7 @@ class Bartleby:
                 if message:
                     try:
                         if Constants.DEBUG and not message.startswith('♥︎'):
-                            print(f"DEBUG: Received message: '{message}'")
+                            print(f"Received message: '{message}'")
                         self.connection_manager.handle_message(message)
                     except Exception as e:
                         if str(e):
