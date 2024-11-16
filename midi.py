@@ -1,6 +1,7 @@
 import time
 import busio
 import adafruit_midi
+import usb_midi
 from adafruit_midi.note_on import NoteOn
 from adafruit_midi.note_off import NoteOff
 from adafruit_midi.pitch_bend import PitchBend
@@ -8,7 +9,7 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -66,50 +67,103 @@ class Constants:
     TIMBRE_CENTER = 64         # Center value for CC74 Y-axis
 
 class MidiTransportManager:
-    """Manages MIDI output streams using shared transport"""
+    """Manages MIDI output streams using both UART and USB MIDI"""
     def __init__(self, transport_manager, midi_callback=None):
+        # Initialize UART MIDI
         self.uart = transport_manager.get_uart()
-        self.midi_device = adafruit_midi.MIDI(
+        self.uart_midi = adafruit_midi.MIDI(
             midi_out=self.uart, 
             out_channel=Constants.ZONE_MANAGER
         )
-        self.midi_callback = midi_callback
         self.uart_initialized = True
-        print("MIDI transport initialized")
+        
+        # Initialize USB MIDI
+        try:
+            self.usb_midi = adafruit_midi.MIDI(
+                midi_out=usb_midi.ports[1],
+                out_channel=Constants.ZONE_MANAGER
+            )
+            self.usb_initialized = True
+            print("USB MIDI initialized")
+        except Exception as e:
+            print(f"USB MIDI initialization failed: {str(e)}")
+            self.usb_initialized = False
+            
+        self.midi_callback = midi_callback
+        print("MIDI transport initialized (UART + USB)")
+
+    # def send_message(self, message):
+    #     """Send MIDI message to both UART and USB MIDI outputs"""
+    #     try:
+    #         if isinstance(message, list):
+    #             # Debug logging for raw MIDI message
+    #             if Constants.DEBUG:
+    #                 print(f"Raw MIDI Message: {[hex(x) for x in message]}")
+                
+    #             # Convert low-level message to appropriate Adafruit MIDI message
+    #             msg_type = message[0] & 0xF0
+    #             channel = message[0] & 0x0F
+                
+    #             if Constants.DEBUG:
+    #                 print(f"Parsed Message: Type={hex(msg_type)}, Channel={channel}")
+                
+    #             midi_msg = None
+    #             if msg_type == 0x90:  # Note On
+    #                 midi_msg = NoteOn(message[1], message[2], channel=channel)
+    #             elif msg_type == 0x80:  # Note Off
+    #                 midi_msg = NoteOff(message[1], message[2], channel=channel)
+    #             elif msg_type == 0xB0:  # Control Change
+    #                 midi_msg = ControlChange(message[1], message[2], channel=channel)
+    #             elif msg_type == 0xD0:  # Channel Pressure
+    #                 midi_msg = ChannelPressure(message[1], channel=channel)
+    #             elif msg_type == 0xE0:  # Pitch Bend
+    #                 # Reconstruct 14-bit pitch bend value
+    #                 pitch_value = (message[2] << 7) | message[1]
+    #                 midi_msg = PitchBend(pitch_value, channel=channel)
+                
+    #             if midi_msg:
+    #                 # Send to UART MIDI
+    #                 if self.uart_initialized:
+    #                     self.uart_midi.send(midi_msg)
+    #                 # Send to USB MIDI
+    #                 if self.usb_initialized:
+    #                     self.usb_midi.send(midi_msg)
+    #         else:
+    #             # Fallback for direct message sending
+    #             if self.uart_initialized:
+    #                 self.uart_midi.send(message)
+    #             if self.usb_initialized:
+    #                 self.usb_midi.send(message)
+                    
+    #     except Exception as e:
+    #         print(f"Error sending MIDI message: {str(e)}")
+
+# temp
 
     def send_message(self, message):
-        """Send MIDI message to MIDI device"""
+        """Send MIDI message to both UART and USB MIDI outputs"""
         try:
             if isinstance(message, list):
                 # Debug logging for raw MIDI message
                 if Constants.DEBUG:
                     print(f"Raw MIDI Message: {[hex(x) for x in message]}")
                 
-                # Convert low-level message to appropriate Adafruit MIDI message
-                msg_type = message[0] & 0xF0
-                channel = message[0] & 0x0F
-                
-                if Constants.DEBUG:
-                    print(f"Parsed Message: Type={hex(msg_type)}, Channel={channel}")
-                
-                if msg_type == 0x90:  # Note On
-                    self.midi_device.send(NoteOn(message[1], message[2], channel=channel))
-                elif msg_type == 0x80:  # Note Off
-                    self.midi_device.send(NoteOff(message[1], message[2], channel=channel))
-                elif msg_type == 0xB0:  # Control Change
-                    self.midi_device.send(ControlChange(message[1], message[2], channel=channel))
-                elif msg_type == 0xD0:  # Channel Pressure
-                    self.midi_device.send(ChannelPressure(message[1], channel=channel))
-                elif msg_type == 0xE0:  # Pitch Bend
-                    # Reconstruct 14-bit pitch bend value
-                    pitch_value = (message[2] << 7) | message[1]
-                    self.midi_device.send(PitchBend(pitch_value, channel=channel))
+                # Send raw bytes directly to transports
+                if self.uart_initialized:
+                    self.uart.write(bytes(message))
+                if self.usb_initialized:
+                    usb_midi.ports[1].write(bytes(message))
             else:
-                # Fallback for direct message sending
-                self.midi_device.send(message)
+                # Fallback for direct message sending (though this path might need revision)
+                if self.uart_initialized:
+                    self.uart_midi.send(message)
+                if self.usb_initialized:
+                    self.usb_midi.send(message)
+                    
         except Exception as e:
             print(f"Error sending MIDI message: {str(e)}")
 
+# end temp
     def read(self, size=None):
         """Read from UART"""
         return self.uart.read(size)
@@ -120,19 +174,12 @@ class MidiTransportManager:
         return self.uart.in_waiting
 
     def cleanup(self):
-        """Clean shutdown of MIDI transport"""
+        """Clean shutdown of MIDI transports"""
         if self.uart and self.uart_initialized:
             self.uart.deinit()
             self.uart_initialized = False
         print("MIDI transport cleaned up")
 
-# Rest of the classes remain the same as in the original implementation
-# (ControllerManager, NoteState, ZoneManager, MPENoteProcessor, 
-# MidiControlProcessor, MPEConfigurator, MidiMessageSender, 
-# MidiSystemInitializer, MidiEventRouter, MidiLogic)
-# Copy the entire original implementation for these classes
-
-# Copying the rest of the original implementation to preserve all functionality
 class ControllerManager:
     """Manages controller assignments and configuration for pots"""
     def __init__(self):
