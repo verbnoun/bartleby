@@ -9,7 +9,7 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001

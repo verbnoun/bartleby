@@ -9,8 +9,7 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    # Debug Settings
-    DEBUG = True
+    DEBUG = False
     SEE_HEARTBEAT = False
     
     # Hardware Setup
@@ -217,6 +216,10 @@ class BartlebyConnectionManager:
                 print("Hello received - starting handshake")
                 self.transport.flush_buffers()
                 self.state = self.HANDSHAKING
+                self._send_handshake_cc()
+            elif self.state == self.HANDSHAKING:
+                # Send handshake CC every time hello is received during handshaking
+                print("Hello received during handshake")
                 self._send_handshake_cc()
             return
             
