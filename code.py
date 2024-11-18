@@ -9,7 +9,7 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     SEE_HEARTBEAT = False
     
     # Hardware Setup
@@ -150,7 +150,7 @@ class TextUart:
                     self.buffer = bytearray()
                     print("Received non-UTF8 data, buffer cleared")
 
-            # If no complete message, return None
+            # No complete message, return None
             return None
 
         except Exception as e:
@@ -192,6 +192,9 @@ class BartlebyConnectionManager:
         self.last_message_time = 0
         self.config_received = False
         
+        # Store CC mapping with names
+        self.cc_mapping = {}  # Format: {pot_number: {'cc': cc_number, 'name': cc_name}}
+        
         print("Bartleby connection manager initialized - listening for Candide")
         
     def update_state(self):
@@ -225,10 +228,18 @@ class BartlebyConnectionManager:
             
         # Handle config message
         if self.state == self.HANDSHAKING and message.startswith("cc:"):
-            print("Config received - connection established")
+            print("Config received - parsing CC mapping")
+            self._parse_cc_config(message)
             self.config_received = True
             self.state = self.CONNECTED
             self._send_current_hw_state()
+            
+            # Debug output of CC mapping if DEBUG is true
+            if Constants.DEBUG:
+                print("\nReceived CC Configuration:")
+                for pot_num, mapping in self.cc_mapping.items():
+                    print(f"Pot {pot_num}: CC {mapping['cc']} - {mapping['name']}")
+                print()  # Extra newline for readability
             return
             
         # Handle heartbeat in connected state
@@ -236,6 +247,37 @@ class BartlebyConnectionManager:
             if Constants.SEE_HEARTBEAT and Constants.DEBUG:
                 print(f"♥︎")
             return  # Just update last_message_time
+            
+    def _parse_cc_config(self, message):
+        """Parse CC configuration message with names"""
+        self.cc_mapping.clear()  # Clear existing mapping
+        
+        # Remove "cc:" prefix
+        config_part = message[3:]
+        if not config_part:
+            return
+            
+        # Split into individual assignments
+        assignments = config_part.split(',')
+        for assignment in assignments:
+            if not assignment:
+                continue
+                
+            # Parse pot=cc:name format
+            try:
+                pot_part, rest = assignment.split('=')
+                cc_part, name = rest.split(':') if ':' in rest else (rest, f"CC{rest}")
+                
+                pot_num = int(pot_part)
+                cc_num = int(cc_part)
+                
+                self.cc_mapping[pot_num] = {
+                    'cc': cc_num,
+                    'name': name
+                }
+            except (ValueError, IndexError) as e:
+                print(f"Error parsing CC assignment '{assignment}': {e}")
+                continue
             
     def _send_handshake_cc(self):
         """Send handshake CC message"""
@@ -275,6 +317,7 @@ class BartlebyConnectionManager:
         self.state = self.STANDALONE
         self.config_received = False
         self.last_message_time = 0
+        self.cc_mapping.clear()
         self.transport.flush_buffers()
         
     def cleanup(self):
