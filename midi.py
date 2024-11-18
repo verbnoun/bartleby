@@ -9,7 +9,7 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -197,7 +197,7 @@ class ControllerManager:
 
     def handle_config_message(self, message):
         """Handle configuration message from Candide
-        Format: cc:0=74,1=71,2=73
+        Format: cc:0=74:Piano Decay,1=71:Filter Resonance
         Returns True if successful, False if invalid format
         """
         try:
@@ -208,9 +208,12 @@ class ControllerManager:
             for assignment in assignments:
                 if '=' not in assignment:
                     continue
-                pot, cc = assignment.split('=')
+                pot, cc_info = assignment.split('=')
+                # Split cc_info to handle cases with or without name
+                cc_parts = cc_info.split(':')
+                cc_num = int(cc_parts[0])
                 pot_num = int(pot)
-                cc_num = int(cc)
+                
                 if 0 <= pot_num <= 13 and 0 <= cc_num <= 127:
                     self.controller_assignments[pot_num] = cc_num
                     if Constants.DEBUG:

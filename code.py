@@ -308,6 +308,12 @@ class BartlebyConnectionManager:
             if encoder_pos != 0:
                 self.midi.handle_octave_shift(encoder_pos)
                 print(f"Current octave position sent: {encoder_pos}")
+            
+            # Pass the CC configuration to MIDI logic
+            if self.cc_mapping:
+                config_message = "cc:" + ",".join(["{0}={1}:{2}".format(pot, mapping["cc"], mapping["name"]) for pot, mapping in self.cc_mapping.items()])
+                self.midi.handle_config_message(config_message)
+                print("Sent CC configuration to MIDI logic")
                 
         except Exception as e:
             print(f"Failed to send hardware state: {str(e)}")
