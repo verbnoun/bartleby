@@ -21,7 +21,7 @@ class Constants:
     
     # Connection
     DETECT_PIN = board.GP22
-    COMMUNICATION_TIMEOUT = 2.0
+    COMMUNICATION_TIMEOUT = 5.0
     
     # New Connection Constants
     STARTUP_DELAY = 1.0  # Give devices time to initialize
