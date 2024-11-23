@@ -9,7 +9,7 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -92,54 +92,6 @@ class MidiTransportManager:
         self.midi_callback = midi_callback
         print("MIDI transport initialized (UART + USB)")
 
-    # def send_message(self, message):
-    #     """Send MIDI message to both UART and USB MIDI outputs"""
-    #     try:
-    #         if isinstance(message, list):
-    #             # Debug logging for raw MIDI message
-    #             if Constants.DEBUG:
-    #                 print(f"Raw MIDI Message: {[hex(x) for x in message]}")
-                
-    #             # Convert low-level message to appropriate Adafruit MIDI message
-    #             msg_type = message[0] & 0xF0
-    #             channel = message[0] & 0x0F
-                
-    #             if Constants.DEBUG:
-    #                 print(f"Parsed Message: Type={hex(msg_type)}, Channel={channel}")
-                
-    #             midi_msg = None
-    #             if msg_type == 0x90:  # Note On
-    #                 midi_msg = NoteOn(message[1], message[2], channel=channel)
-    #             elif msg_type == 0x80:  # Note Off
-    #                 midi_msg = NoteOff(message[1], message[2], channel=channel)
-    #             elif msg_type == 0xB0:  # Control Change
-    #                 midi_msg = ControlChange(message[1], message[2], channel=channel)
-    #             elif msg_type == 0xD0:  # Channel Pressure
-    #                 midi_msg = ChannelPressure(message[1], channel=channel)
-    #             elif msg_type == 0xE0:  # Pitch Bend
-    #                 # Reconstruct 14-bit pitch bend value
-    #                 pitch_value = (message[2] << 7) | message[1]
-    #                 midi_msg = PitchBend(pitch_value, channel=channel)
-                
-    #             if midi_msg:
-    #                 # Send to UART MIDI
-    #                 if self.uart_initialized:
-    #                     self.uart_midi.send(midi_msg)
-    #                 # Send to USB MIDI
-    #                 if self.usb_initialized:
-    #                     self.usb_midi.send(midi_msg)
-    #         else:
-    #             # Fallback for direct message sending
-    #             if self.uart_initialized:
-    #                 self.uart_midi.send(message)
-    #             if self.usb_initialized:
-    #                 self.usb_midi.send(message)
-                    
-    #     except Exception as e:
-    #         print(f"Error sending MIDI message: {str(e)}")
-
-# temp
-
     def send_message(self, message):
         """Send MIDI message to both UART and USB MIDI outputs"""
         try:
@@ -163,7 +115,6 @@ class MidiTransportManager:
         except Exception as e:
             print(f"Error sending MIDI message: {str(e)}")
 
-# end temp
     def read(self, size=None):
         """Read from UART"""
         return self.uart.read(size)
@@ -353,9 +304,8 @@ class MPENoteProcessor:
                 
                 if not note_state:  # New note
                     velocity = int(strike_velocity * 127) if strike_velocity is not None else int(pressure * 127)
-                    # Proper MPE order: CC74 → Pressure → Pitch Bend → Note On
+                    # Proper MPE order: Pressure → Pitch Bend → Note On
                     midi_events.extend([
-                        ('timbre_init', key_id),           # Y-axis
                         ('pressure_init', key_id, pressure),  # Z-axis
                         ('pitch_bend_init', key_id, position),  # X-axis
                         ('note_on', midi_note, velocity, key_id)
@@ -366,7 +316,6 @@ class MPENoteProcessor:
                 
                 elif note_state.active:
                     midi_events.extend([
-                        ('timbre_update', key_id, position),  # Using position for timbre calculation
                         ('pressure_update', key_id, pressure),
                         ('pitch_bend_update', key_id, position)
                     ])
@@ -401,7 +350,6 @@ class MPENoteProcessor:
                 position = (note_state.pitch_bend - Constants.PITCH_BEND_CENTER) / (Constants.PITCH_BEND_MAX / 2)
                 
                 midi_events.extend([
-                    ('timbre_init', note_state.key_id),
                     ('pressure_init', note_state.key_id, note_state.pressure),
                     ('pitch_bend_init', note_state.key_id, position),
                     ('note_off', old_note, 0, note_state.key_id),
@@ -410,7 +358,6 @@ class MPENoteProcessor:
                 
                 if note_state.active and note_state.pressure > 0:
                     midi_events.extend([
-                        ('timbre_update', note_state.key_id, position),
                         ('pressure_update', note_state.key_id, note_state.pressure),
                         ('pitch_bend_update', note_state.key_id, position)
                     ])
@@ -504,11 +451,7 @@ class MidiEventRouter:
         event_type = event[0]
         params = event[1:]
         
-        if event_type == 'timbre_init':
-            self._handle_timbre_init(*params)
-        elif event_type == 'timbre_update':
-            self._handle_timbre_update(*params)
-        elif event_type == 'pressure_init':
+        if event_type == 'pressure_init':
             self._handle_pressure_init(*params)
         elif event_type == 'pressure_update':
             self._handle_pressure_update(*params)
@@ -522,18 +465,6 @@ class MidiEventRouter:
             self._handle_note_off(*params)
         elif event_type == 'control_change':
             self._handle_control_change(*params)
-
-    def _handle_timbre_init(self, key_id):
-        channel = self.channel_manager.allocate_channel(key_id)
-        self.message_sender.send_message([0xB0 | channel, Constants.CC_TIMBRE, Constants.TIMBRE_CENTER])
-
-    def _handle_timbre_update(self, key_id, position):
-        note_state = self.channel_manager.get_note_state(key_id)
-        if note_state:
-            # Map position (-1 to 1) to timbre range (0 to 127)
-            timbre_value = int((position + 1) * 63.5)
-            self.message_sender.send_message([0xB0 | note_state.channel, Constants.CC_TIMBRE, timbre_value])
-            note_state.timbre = timbre_value
 
     def _handle_pressure_init(self, key_id, pressure):
         channel = self.channel_manager.allocate_channel(key_id)
