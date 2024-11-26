@@ -6,7 +6,7 @@ import analogio
 
 class Constants:
     # Debug Settings
-    DEBUG = False
+    DEBUG = True
     POT_LOG_THRESHOLD = 0.01
     
     # ADC Constants
@@ -55,12 +55,12 @@ class Constants:
     NUM_CHANNELS = 50
 
     # Sensor Constants
-    MAX_VK_RESISTANCE = 11000  # Upper resistance bound
-    MIN_VK_RESISTANCE = 500    # Lower resistance bound
-    INITIAL_ACTIVATION_THRESHOLD = 0.001  # Threshold for note-on
+    MAX_VK_RESISTANCE = 10000 #11000 # Upper resistance bound
+    MIN_VK_RESISTANCE = 950 #500   # Lower resistance bound
+    INITIAL_ACTIVATION_THRESHOLD = 0.1 #0.01  # Threshold for note-on
     DEACTIVATION_THRESHOLD = 0.008  # Threshold for note-off
-    REST_VOLTAGE_THRESHOLD = 3.15
-    ADC_RESISTANCE_SCALE = 3500
+    REST_VOLTAGE_THRESHOLD = 3.3
+    ADC_RESISTANCE_SCALE = 100000 #3500
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
