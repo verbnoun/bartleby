@@ -1,4 +1,5 @@
 import board
+import math
 import time
 import digitalio
 import rotaryio
@@ -56,11 +57,17 @@ class Constants:
 
     # Sensor Constants
     MAX_VK_RESISTANCE = 10000 #11000 # Upper resistance bound
-    MIN_VK_RESISTANCE = 950 #500   # Lower resistance bound
-    INITIAL_ACTIVATION_THRESHOLD = 0.1 #0.01  # Threshold for note-on
+    MIN_VK_RESISTANCE = 750 #500   # Lower resistance bound
+    INITIAL_ACTIVATION_THRESHOLD = 0.001 #0.01  # Threshold for note-on
     DEACTIVATION_THRESHOLD = 0.008  # Threshold for note-off
     REST_VOLTAGE_THRESHOLD = 3.3
     ADC_RESISTANCE_SCALE = 100000 #3500
+
+    # Envelope Constants
+    PRESSURE_FLOOR = 0.001      # Minimum pressure value to consider
+    PRESSURE_CEILING = 1     # Maximum expected raw pressure value
+    ENVELOPE_CURVE = 4       # Envelope curve shape (higher = more aggressive)
+
 
 class Multiplexer:
     def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
@@ -147,15 +154,38 @@ class PressureSensorProcessor:
         return Constants.ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
         
     def normalize_resistance(self, resistance):
-        """Convert resistance to normalized pressure value (0.0-1.0)"""
+        """Convert resistance to normalized pressure value (0.0-1.0) using logarithmic curve"""
         if resistance >= Constants.MAX_VK_RESISTANCE:
             return 0
         if resistance <= Constants.MIN_VK_RESISTANCE:
             return 1
             
-        # Linear normalization between bounds
-        normalized = (Constants.MAX_VK_RESISTANCE - resistance) / (Constants.MAX_VK_RESISTANCE - Constants.MIN_VK_RESISTANCE)
-        return normalized
+        # Calculate logarithmic normalization
+        log_min = math.log(Constants.MIN_VK_RESISTANCE)
+        log_max = math.log(Constants.MAX_VK_RESISTANCE)
+        log_value = math.log(resistance)
+        
+        # Inverse the normalization since resistance decreases with pressure
+        normalized = 1.0 - ((log_value - log_min) / (log_max - log_min))
+        
+        # Apply envelope
+        return self.apply_envelope(normalized)
+
+    def apply_envelope(self, raw_pressure):
+        """Apply envelope to expand limited pressure range"""
+        # Clamp to floor/ceiling
+        if raw_pressure < Constants.PRESSURE_FLOOR:
+            return 0.0
+        if raw_pressure > Constants.PRESSURE_CEILING:
+            return 1.0
+            
+        # Normalize to new range
+        normalized = (raw_pressure - Constants.PRESSURE_FLOOR) / (Constants.PRESSURE_CEILING - Constants.PRESSURE_FLOOR)
+        
+        # Apply curve
+        curved = math.pow(normalized, Constants.ENVELOPE_CURVE)
+        
+        return max(0.0, min(1.0, curved))
 
     def calculate_position(self, left_norm, right_norm):
         """Calculate relative position (-1.0 to 1.0) from normalized L/R values"""
