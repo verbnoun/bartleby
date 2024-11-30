@@ -9,7 +9,7 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
@@ -155,7 +155,14 @@ class ControllerManager:
             if not message.startswith("cc:"):
                 return False
 
+            # Reset all assignments to CC0 first
+            self.controller_assignments.clear()
+            for i in range(14):  # 0-13
+                self.controller_assignments[i] = 0
+
+            # Process assignments from message
             assignments = message[3:].split(',')
+            max_pot = -1
             for assignment in assignments:
                 if '=' not in assignment:
                     continue
@@ -164,11 +171,18 @@ class ControllerManager:
                 cc_parts = cc_info.split(':')
                 cc_num = int(cc_parts[0])
                 pot_num = int(pot)
+                max_pot = max(max_pot, pot_num)
                 
                 if 0 <= pot_num <= 13 and 0 <= cc_num <= 127:
                     self.controller_assignments[pot_num] = cc_num
                     if Constants.DEBUG:
                         print(f"Assigned Pot {pot_num} to CC {cc_num}")
+
+            # Ensure all pots after the last assigned one are set to CC0
+            for i in range(max_pot + 1, 14):
+                self.controller_assignments[i] = 0
+                if Constants.DEBUG:
+                    print(f"Set Pot {i} to CC0 (unassigned)")
 
             return True
 
