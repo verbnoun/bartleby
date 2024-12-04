@@ -9,10 +9,16 @@ from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 
 class Constants:
-    DEBUG = True
+    DEBUG = False
     # MIDI Transport Settings
     MIDI_BAUDRATE = 31250
     UART_TIMEOUT = 0.001
+    
+    # Velocity Settings
+    VELOCITY_DELAY = 0.015  # 15ms delay for strike velocity reading
+    PRESSURE_HISTORY_SIZE = 3  # Last 3 readings for release velocity
+    RELEASE_VELOCITY_THRESHOLD = 0.01  # Lower threshold for more sensitivity
+    RELEASE_VELOCITY_SCALE = 0.5  # Scale factor to prevent constant max velocity
     
     # MPE Configuration
     ZONE_MANAGER = 0           # MIDI channel 1 (zero-based) - aligned with Candide naming
@@ -193,7 +199,8 @@ class ControllerManager:
 class NoteState:
     """Memory-efficient note state tracking for CircuitPython with active state tracking"""
     __slots__ = ['key_id', 'midi_note', 'channel', 'velocity', 'timestamp', 
-                 'pressure', 'pitch_bend', 'timbre', 'active']
+                 'pressure', 'pitch_bend', 'timbre', 'active', 'activation_time',
+                 'pressure_history', 'pressure_timestamps']
     
     def __init__(self, key_id, midi_note, channel, velocity):
         self.key_id = key_id
@@ -201,10 +208,64 @@ class NoteState:
         self.channel = channel
         self.velocity = velocity
         self.timestamp = time.monotonic()
+        self.activation_time = self.timestamp
         self.pressure = 0
         self.pitch_bend = Constants.PITCH_BEND_CENTER
         self.timbre = Constants.TIMBRE_CENTER
         self.active = True
+        self.pressure_history = []
+        self.pressure_timestamps = []
+
+    def update_pressure(self, pressure):
+        """Update pressure history for release velocity calculation"""
+        current_time = time.monotonic()
+        self.pressure = pressure
+        
+        # Add new pressure reading with timestamp
+        self.pressure_history.append(pressure)
+        self.pressure_timestamps.append(current_time)
+        
+        # Keep only the most recent readings
+        if len(self.pressure_history) > Constants.PRESSURE_HISTORY_SIZE:
+            self.pressure_history.pop(0)
+            self.pressure_timestamps.pop(0)
+
+    def calculate_release_velocity(self):
+        """Calculate release velocity based on pressure decay rate"""
+        if len(self.pressure_history) < 2:
+            return 0
+            
+        # Calculate average rate of change over the last few readings
+        total_change = 0
+        total_time = 0
+        
+        for i in range(1, len(self.pressure_history)):
+            pressure_change = self.pressure_history[i] - self.pressure_history[i-1]
+            time_change = self.pressure_timestamps[i] - self.pressure_timestamps[i-1]
+            if time_change > 0:
+                total_change += pressure_change
+                total_time += time_change
+        
+        if total_time <= 0:
+            return 0
+            
+        avg_decay_rate = abs(total_change / total_time)
+        
+        # Convert decay rate to MIDI velocity (0-127)
+        if avg_decay_rate < Constants.RELEASE_VELOCITY_THRESHOLD:
+            return 0
+            
+        # Scale the decay rate and apply curve for more natural response
+        scaled_rate = avg_decay_rate * 2.0  # Double the rate to make it more sensitive
+        velocity = min(127, int(scaled_rate * 127))
+        
+        if Constants.DEBUG:
+            print(f"Release velocity calculation:")
+            print(f"  Pressure history: {self.pressure_history}")
+            print(f"  Average decay rate: {avg_decay_rate:.3f}")
+            print(f"  Calculated velocity: {velocity}")
+            
+        return velocity
 
 class ZoneManager:
     def __init__(self):
@@ -306,9 +367,11 @@ class MPENoteProcessor:
         self.octave_shift = 0
         self.base_root_note = 60  # Middle C
         self.active_notes = set()
+        self.pending_velocities = {}  # Store initial pressures for delayed velocity
 
     def process_key_changes(self, changed_keys, config):
         midi_events = []
+        current_time = time.monotonic()
         
         for key_id, position, pressure, strike_velocity in changed_keys:
             note_state = self.channel_manager.get_note_state(key_id)
@@ -317,33 +380,49 @@ class MPENoteProcessor:
                 midi_note = self.base_root_note + self.octave_shift * 12 + key_id
                 
                 if not note_state:  # New note
-                    velocity = int(strike_velocity * 127) if strike_velocity is not None else int(pressure * 127)
-                    # Proper MPE order: Pressure → Pitch Bend → Note On
-                    midi_events.extend([
-                        ('pressure_init', key_id, pressure),  # Z-axis
-                        ('pitch_bend_init', key_id, position),  # X-axis
-                        ('note_on', midi_note, velocity, key_id)
-                    ])
-                    self.active_notes.add(key_id)
-                    if Constants.DEBUG:
-                        print(f"New note: key={key_id}, note={midi_note}, velocity={velocity}")
+                    if key_id not in self.pending_velocities:
+                        # Store initial pressure and time for delayed velocity calculation
+                        self.pending_velocities[key_id] = {
+                            'pressure': pressure,
+                            'time': current_time,
+                            'midi_note': midi_note,
+                            'position': position
+                        }
+                    elif current_time - self.pending_velocities[key_id]['time'] >= Constants.VELOCITY_DELAY:
+                        # Enough time has passed, use the current pressure as velocity
+                        velocity = int(pressure * 127)
+                        # Proper MPE order: Pressure → Pitch Bend → Note On
+                        midi_events.extend([
+                            ('pressure_init', key_id, pressure),  # Z-axis
+                            ('pitch_bend_init', key_id, position),  # X-axis
+                            ('note_on', midi_note, velocity, key_id)
+                        ])
+                        self.active_notes.add(key_id)
+                        del self.pending_velocities[key_id]
+                        if Constants.DEBUG:
+                            print(f"New note: key={key_id}, note={midi_note}, velocity={velocity}")
                 
                 elif note_state.active:
+                    note_state.update_pressure(pressure)
                     midi_events.extend([
                         ('pressure_update', key_id, pressure),
                         ('pitch_bend_update', key_id, position)
                     ])
                 
             else:  # Key released
+                if key_id in self.pending_velocities:
+                    del self.pending_velocities[key_id]
+                
                 if key_id in self.active_notes and note_state and note_state.active:
                     midi_note = note_state.midi_note
+                    release_velocity = note_state.calculate_release_velocity()
                     midi_events.extend([
                         ('pressure_update', key_id, 0),  # Final pressure of 0
-                        ('note_off', midi_note, 0, key_id)
+                        ('note_off', midi_note, release_velocity, key_id)
                     ])
                     self.active_notes.remove(key_id)
                     if Constants.DEBUG:
-                        print(f"Note off: key={key_id}, note={midi_note}")
+                        print(f"Note off: key={key_id}, note={midi_note}, release_velocity={release_velocity}")
 
         return midi_events
 
