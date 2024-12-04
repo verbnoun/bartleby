@@ -428,7 +428,8 @@ class MPENoteProcessor:
 
     def handle_octave_shift(self, direction):
         midi_events = []
-        new_octave = max(-2, min(2, self.octave_shift + direction))
+        # Changed from -2/+2 to -3/+3 to match hardware encoder range
+        new_octave = max(-3, min(3, self.octave_shift + direction))
         
         if new_octave != self.octave_shift:
             if Constants.DEBUG:

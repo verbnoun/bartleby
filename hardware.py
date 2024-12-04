@@ -392,8 +392,8 @@ class RotaryEncoderHandler:
         ]
         
         self.num_encoders = len(self.encoders)
-        self.min_position = 0
-        self.max_position = 3  # 4 modes (0-3)
+        self.min_position = -3  # Changed from 0 to -3 to allow down three octaves
+        self.max_position = 3   # Allow up three octaves
 
         # Initialize state tracking
         self.encoder_positions = [0] * self.num_encoders

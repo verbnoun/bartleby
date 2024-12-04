@@ -9,7 +9,7 @@ from hardware import (
 from midi import MidiLogic
 
 class Constants:
-    DEBUG = False
+    DEBUG = True
     SEE_HEARTBEAT = False
     
     # Hardware Setup
@@ -460,15 +460,17 @@ class HardwareCoordinator:
         # Always read keys at full speed
         start_time = get_precise_time()
         changes['keys'] = self.components['keyboard'].read_keys()
-        if changes['keys']:
-            print(format_processing_time(start_time, "Key state read"))
+        if Constants.DEBUG:
+            if changes['keys']:
+                print(format_processing_time(start_time, "Key state read"))
         
         # Read pots at interval
         if state_manager.should_scan_pots():
             start_time = get_precise_time()
             changes['pots'] = self.components['pots'].read_pots()
-            if changes['pots']:
-                print(format_processing_time(start_time, "Potentiometer scan"))
+            if Constants.DEBUG:
+                if changes['pots']:
+                    print(format_processing_time(start_time, "Potentiometer scan"))
             state_manager.update_pot_scan_time()
         
         # Read encoders at interval
@@ -585,7 +587,8 @@ class Bartleby:
                     changes['pots'],
                     {}  # Empty config since we're not using instrument settings
                 )
-                print(format_processing_time(start_time, "Total time"))
+                if Constants.DEBUG:
+                    print(format_processing_time(start_time, "Total time"))
             
             return True
                 
