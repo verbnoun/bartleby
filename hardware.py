@@ -259,13 +259,11 @@ class KeyStateTracker:
                 self.active_keys.append(key_index)
                 if Constants.DEBUG:
                     print(f"\nKey {key_index} activated")
-                    print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
         else:
             if key_index in self.active_keys:
                 self.active_keys.remove(key_index)
                 if Constants.DEBUG:
                     print(f"\nKey {key_index} deactivated")
-                    print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
 
         # Check if state changed
         if (left_normalized != key_state.left_value or 
@@ -281,7 +279,6 @@ class KeyStateTracker:
                 print(f"\nKey {key_index} state updated:")
                 print(f"L/R: {left_normalized:.3f}/{right_normalized:.3f}")
                 print(f"Position: {position:.3f}, Pressure: {pressure:.3f}")
-                print(f"Processing time: {(time.monotonic() - start_time)*1000:.2f}ms")
             return True
         return False
 

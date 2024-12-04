@@ -48,6 +48,21 @@ class Constants:
     HANDSHAKE_CC = 119  # Undefined CC number
     HANDSHAKE_VALUE = 42  # Arbitrary value
 
+    # Timing precision
+    TIME_PRECISION = 9  # Nanosecond precision
+
+def get_precise_time():
+    """Get high precision time measurement in nanoseconds"""
+    return time.monotonic_ns()
+
+def format_processing_time(start_time, operation=None):
+    """Format processing time with nanosecond precision and optional operation description"""
+    elapsed_ns = get_precise_time() - start_time
+    elapsed_ms = elapsed_ns / 1_000_000  # Convert ns to ms
+    if operation:
+        return f"{operation} took {elapsed_ms:.3f}ms"
+    return f"Processing took {elapsed_ms:.3f}ms"
+
 class TransportManager:
     """Manages shared UART instance for both text and MIDI communication"""
     def __init__(self, tx_pin, rx_pin, baudrate=31250, timeout=0.001):
@@ -73,8 +88,8 @@ class TransportManager:
         if not self.uart_initialized:
             return
         try:
-            start_time = time.monotonic()
-            while (time.monotonic() - start_time) < Constants.BUFFER_CLEAR_TIMEOUT:
+            start_time = get_precise_time()
+            while (get_precise_time() - start_time) < (Constants.BUFFER_CLEAR_TIMEOUT * 1_000_000_000):  # Convert to ns
                 if self.uart and self.uart.in_waiting:
                     self.uart.read()
                 else:
@@ -107,15 +122,15 @@ class TextUart:
 
     def write(self, message):
         """Write text message with minimum delay between writes"""
-        current_time = time.monotonic()
-        delay_needed = Constants.MESSAGE_TIMEOUT - (current_time - self.last_write)
+        current_time = get_precise_time()
+        delay_needed = (Constants.MESSAGE_TIMEOUT * 1_000_000_000) - (current_time - self.last_write)  # Convert to ns
         if delay_needed > 0:
-            time.sleep(delay_needed)
+            time.sleep(delay_needed / 1_000_000_000)  # Convert back to seconds
             
         if isinstance(message, str):
             message = message.encode('utf-8')
         result = self.uart.write(message)
-        self.last_write = time.monotonic()
+        self.last_write = get_precise_time()
         return result
 
     def read(self):
@@ -200,8 +215,8 @@ class BartlebyConnectionManager:
     def update_state(self):
         """Check for timeouts and manage state transitions"""
         if self.state != self.STANDALONE:
-            current_time = time.monotonic()
-            if current_time - self.last_message_time > Constants.COMMUNICATION_TIMEOUT:
+            current_time = get_precise_time()
+            if (current_time - self.last_message_time) > (Constants.COMMUNICATION_TIMEOUT * 1_000_000_000):  # Convert to ns
                 print("Communication timeout - returning to standalone")
                 self._reset_state()
                 
@@ -211,7 +226,7 @@ class BartlebyConnectionManager:
             return
             
         # Update last message time for timeout tracking
-        self.last_message_time = time.monotonic()
+        self.last_message_time = get_precise_time()
         
         # Handle hello message
         if message.startswith("hello"):
@@ -308,6 +323,8 @@ class BartlebyConnectionManager:
     def _send_current_hw_state(self):
         """Send current hardware state as MIDI messages"""
         try:
+            start_time = get_precise_time()
+            
             # Force read of all pots during handshake
             all_pots = self.hardware.components['pots'].read_all_pots()
             
@@ -317,7 +334,7 @@ class BartlebyConnectionManager:
             # Send pot values
             if pot_changes:
                 self.midi.update([], pot_changes, {})
-                print(f"Sent all {len(pot_changes)} pot values")
+                print(f"Sent {len(pot_changes)} pot values")
             
             # Send encoder position
             encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)
@@ -330,6 +347,8 @@ class BartlebyConnectionManager:
                 config_message = "cc:" + ",".join(["{0}={1}:{2}".format(pot, mapping["cc"], mapping["name"]) for pot, mapping in self.cc_mapping.items()])
                 self.midi.handle_config_message(config_message)
                 print("Sent CC configuration to MIDI logic")
+                
+            print(format_processing_time(start_time, "Hardware state synchronization"))
                 
         except Exception as e:
             print(f"Failed to send hardware state: {str(e)}")
@@ -357,13 +376,13 @@ class StateManager:
         self.last_encoder_scan = 0
         
     def update_time(self):
-        self.current_time = time.monotonic()
+        self.current_time = get_precise_time()
         
     def should_scan_pots(self):
-        return self.current_time - self.last_pot_scan >= Constants.POT_SCAN_INTERVAL
+        return (self.current_time - self.last_pot_scan) >= (Constants.POT_SCAN_INTERVAL * 1_000_000_000)  # Convert to ns
         
     def should_scan_encoders(self):
-        return self.current_time - self.last_encoder_scan >= Constants.ENCODER_SCAN_INTERVAL
+        return (self.current_time - self.last_encoder_scan) >= (Constants.ENCODER_SCAN_INTERVAL * 1_000_000_000)  # Convert to ns
         
     def update_pot_scan_time(self):
         self.last_pot_scan = self.current_time
@@ -439,31 +458,41 @@ class HardwareCoordinator:
         }
         
         # Always read keys at full speed
+        start_time = get_precise_time()
         changes['keys'] = self.components['keyboard'].read_keys()
+        if changes['keys']:
+            print(format_processing_time(start_time, "Key state read"))
         
         # Read pots at interval
         if state_manager.should_scan_pots():
+            start_time = get_precise_time()
             changes['pots'] = self.components['pots'].read_pots()
             if changes['pots']:
-                state_manager.update_pot_scan_time()
+                print(format_processing_time(start_time, "Potentiometer scan"))
+            state_manager.update_pot_scan_time()
         
         # Read encoders at interval
         if state_manager.should_scan_encoders():
+            start_time = get_precise_time()
             for i in range(self.components['encoders'].num_encoders):
                 new_events = self.components['encoders'].read_encoder(i)
                 if new_events:
                     changes['encoders'].extend(new_events)
+            if changes['encoders']:
+                print(format_processing_time(start_time, "Encoder scan"))
             state_manager.update_encoder_scan_time()
             
         return changes
     
     def handle_encoder_events(self, encoder_events, midi):
+        start_time = get_precise_time()
         for event in encoder_events:
             if event[0] == 'rotation':
                 _, direction = event[1:3]
                 midi.handle_octave_shift(direction)
                 if Constants.DEBUG:
                     print(f"Octave shifted {direction}: new position {self.components['encoders'].get_encoder_position(0)}")
+                    print(format_processing_time(start_time, "Octave shift processing"))
     
     def reset_encoders(self):
         self.components['encoders'].reset_all_encoder_positions()
@@ -528,6 +557,7 @@ class Bartleby:
             self.connection_manager.update_state()
             
             # Process hardware and MIDI
+            start_time = get_precise_time()
             changes = self.hardware.read_hardware_state(self.state_manager)
             
             # In Bartleby.update():
@@ -546,11 +576,16 @@ class Bartleby:
             if changes['encoders']:
                 self.hardware.handle_encoder_events(changes['encoders'], self.midi)
             
-            self.midi.update(
-                changes['keys'],
-                changes['pots'],
-                {}  # Empty config since we're not using instrument settings
-            )
+            # Process MIDI updates with timing
+            if changes['keys'] or changes['pots'] or changes['encoders']:
+                # Log total time from hardware detection to MIDI sent
+                hw_detect_time = get_precise_time()
+                self.midi.update(
+                    changes['keys'],
+                    changes['pots'],
+                    {}  # Empty config since we're not using instrument settings
+                )
+                print(format_processing_time(start_time, "Total time"))
             
             return True
                 
