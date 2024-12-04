@@ -226,7 +226,7 @@ class BartlebyConnectionManager:
                 self._send_handshake_cc()
             return
             
-        # Handle config message
+        # Handle config message during handshake
         if self.state == self.HANDSHAKING and message.startswith("cc:"):
             print("Config received - parsing CC mapping")
             self._parse_cc_config(message)
@@ -237,6 +237,22 @@ class BartlebyConnectionManager:
             # Debug output of CC mapping if DEBUG is true
             if Constants.DEBUG:
                 print("\nReceived CC Configuration:")
+                for pot_num, mapping in self.cc_mapping.items():
+                    print(f"Pot {pot_num}: CC {mapping['cc']} - {mapping['name']}")
+                print()  # Extra newline for readability
+            return
+            
+        # Handle config message after connection established
+        if self.state == self.CONNECTED and message.startswith("cc:"):
+            print("Config update received - applying new CC mapping")
+            self._parse_cc_config(message)
+            # Pass the new CC configuration to MIDI logic
+            self.midi.handle_config_message(message)
+            # Send current pot values after receiving new config
+            self._send_current_hw_state()
+            # Debug output of CC mapping if DEBUG is true
+            if Constants.DEBUG:
+                print("\nUpdated CC Configuration:")
                 for pot_num, mapping in self.cc_mapping.items():
                     print(f"Pot {pot_num}: CC {mapping['cc']} - {mapping['name']}")
                 print()  # Extra newline for readability
@@ -301,7 +317,7 @@ class BartlebyConnectionManager:
             # Send pot values
             if pot_changes:
                 self.midi.update([], pot_changes, {})
-                print(f"Handshake: Sent all {len(pot_changes)} pot values")
+                print(f"Sent all {len(pot_changes)} pot values")
             
             # Send encoder position
             encoder_pos = self.hardware.components['encoders'].get_encoder_position(0)

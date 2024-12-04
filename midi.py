@@ -489,8 +489,10 @@ class MidiEventRouter:
         note_state = self.channel_manager.get_note_state(key_id)
         if note_state:
             pressure_value = int(pressure * 127)
-            self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
-            note_state.pressure = pressure
+            # Only send if pressure has changed
+            if pressure_value != note_state.pressure:
+                self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
+                note_state.pressure = pressure_value
 
     def _handle_pitch_bend_init(self, key_id, position):
         channel = self.channel_manager.allocate_channel(key_id)
@@ -503,10 +505,12 @@ class MidiEventRouter:
         note_state = self.channel_manager.get_note_state(key_id)
         if note_state:
             bend_value = self._calculate_pitch_bend(position)
-            lsb = bend_value & 0x7F
-            msb = (bend_value >> 7) & 0x7F
-            self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
-            note_state.pitch_bend = bend_value
+            # Only send if pitch bend has changed
+            if bend_value != note_state.pitch_bend:
+                lsb = bend_value & 0x7F
+                msb = (bend_value >> 7) & 0x7F
+                self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
+                note_state.pitch_bend = bend_value
 
     def _handle_note_on(self, midi_note, velocity, key_id):
         channel = self.channel_manager.allocate_channel(key_id)
