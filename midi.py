@@ -15,7 +15,7 @@ class Constants:
     UART_TIMEOUT = 0.001
     
     # Velocity Settings
-    VELOCITY_DELAY = 0.015  # 15ms delay for strike velocity reading
+    VELOCITY_DELAY = 0 #0.015  # 15ms delay for strike velocity reading # DO NOT USE
     PRESSURE_HISTORY_SIZE = 3  # Last 3 readings for release velocity
     RELEASE_VELOCITY_THRESHOLD = 0.01  # Lower threshold for more sensitivity
     RELEASE_VELOCITY_SCALE = 0.5  # Scale factor to prevent constant max velocity
