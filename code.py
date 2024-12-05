@@ -11,7 +11,6 @@ from connection import ConnectionManager, Constants as ConnConstants, get_precis
 
 class Constants:
     DEBUG = True
-    SEE_HEARTBEAT = False
     
     # Hardware Setup
     SETUP_DELAY = 0.1
@@ -323,10 +322,10 @@ class Bartleby:
     def _setup_initial_state(self):
         self.hardware.reset_encoders()
         
-        # Force read of all pots during initialization
+        # Force read of all pots during initialization but don't send MIDI
         initial_pots = self.hardware.components['pots'].read_all_pots()
         
-        # Optional: Send initial pot values during initialization
+        # Log initial pot values for debugging only
         if initial_pots and Constants.DEBUG:
             print(f"Initial pot values read: {initial_pots}")
         
@@ -351,7 +350,7 @@ class Bartleby:
                 message = self.text_uart.read()
                 if message:
                     try:
-                        if Constants.DEBUG and not message.startswith('♥︎'):
+                        if Constants.DEBUG and not message.startswith('♡'):
                             print(f"Received message: '{message}'")
                         self.connection_manager.handle_message(message)
                     except Exception as e:
