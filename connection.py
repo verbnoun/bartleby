@@ -3,7 +3,7 @@ import time
 
 class Constants:
     DEBUG = True
-    SEE_HEARTBEAT = True
+    SEE_HEARTBEAT = False
     
     # Connection
     DETECT_PIN = board.GP22
@@ -66,8 +66,9 @@ class ConnectionManager:
         """Check for timeouts"""
         if self.state != self.STANDALONE:
             current_time = time.monotonic()
-            if (current_time - self.last_message_time) > Constants.COMMUNICATION_TIMEOUT:
-                _log("Communication timeout - returning to standalone", "-> STANDALONE")
+            time_since_last = current_time - self.last_message_time
+            if time_since_last > Constants.COMMUNICATION_TIMEOUT:
+                _log(f"Communication timeout ({time_since_last:.1f}s) - returning to standalone", "-> STANDALONE")
                 self._reset_state()
                 
     def handle_message(self, message):
@@ -92,8 +93,8 @@ class ConnectionManager:
                     self._send_pot_values()
                 return
                 
-            # Handle heartbeat in connected state
-            if self.state == self.CONNECTED and message.startswith("♡"):
+            # Handle heartbeat
+            if message.startswith("♡"):
                 if Constants.SEE_HEARTBEAT and Constants.DEBUG:
                     _log("♡", "CONNECTED")
                 return
@@ -111,27 +112,37 @@ class ConnectionManager:
             if not config_part:
                 return False
                 
-            for assignment in config_part.split('|'):
-                if not assignment:
-                    continue
-                    
-                try:
-                    pot_part, cc_part = assignment.split('=')
-                    pot_num = int(pot_part)
-                    cc_num = int(cc_part)
-                    self.cc_mapping[pot_num] = {'cc': cc_num}
-                except (ValueError, IndexError) as e:
-                    print(f"Error parsing CC assignment '{assignment}': {e}")
-                    continue
-                    
-            # Debug output
-            if Constants.DEBUG and self.cc_mapping:
-                print("\nReceived CC Configuration:")
-                for pot_num, mapping in self.cc_mapping.items():
-                    print(f"Pot {pot_num}: CC {mapping['cc']}")
-                print()
+            # Convert the new format to the format expected by MIDI system
+            # New format: "cc|0=85|1=73|2=75|3=66|4=72"
+            # Convert to: "cc:0=85,1=73,2=75,3=66,4=72"
+            assignments = config_part.split('|')
+            midi_format = "cc:" + ",".join(assignments)
+            
+            # Send to MIDI system for processing
+            if self.midi.handle_config_message(midi_format):
+                # Store locally for our reference
+                for assignment in assignments:
+                    if not assignment:
+                        continue
+                    try:
+                        pot_part, cc_part = assignment.split('=')
+                        pot_num = int(pot_part)
+                        cc_num = int(cc_part)
+                        self.cc_mapping[pot_num] = {'cc': cc_num}
+                    except (ValueError, IndexError) as e:
+                        print(f"Error parsing CC assignment '{assignment}': {e}")
+                        continue
                 
-            return bool(self.cc_mapping)
+                # Debug output
+                if Constants.DEBUG and self.cc_mapping:
+                    print("\nReceived CC Configuration:")
+                    for pot_num, mapping in self.cc_mapping.items():
+                        print(f"Pot {pot_num}: CC {mapping['cc']}")
+                    print()
+                
+                return True
+            
+            return False
             
         except Exception as e:
             print(f"Failed to parse config: {str(e)}")
