@@ -12,7 +12,6 @@ from logging import (
     log, TAG_BARTLEBY, TAG_HW, TAG_MIDI, TAG_TRANS,
     COLOR_CYAN, COLOR_BLUE, COLOR_MAGENTA, COLOR_GREEN, COLOR_YELLOW, COLOR_RESET
 )
-from connection import get_precise_time, format_processing_time
 from transport import TransportManager, TextUart
 from state import StateManager
 from coordinator import HardwareCoordinator
@@ -106,7 +105,6 @@ class Bartleby:
             self.connection_manager.update_state()
             
             # Process hardware and MIDI
-            start_time = get_precise_time()
             changes = self.hardware.read_hardware_state(self.state_manager)
             
             # Process incoming messages
@@ -124,16 +122,13 @@ class Bartleby:
             if changes['encoders']:
                 self.hardware.handle_encoder_events(changes['encoders'], self.midi)
             
-            # Process MIDI updates with timing
+            # Process MIDI updates
             if changes['keys'] or changes['pots'] or changes['encoders']:
-                # Log total time from hardware detection to MIDI sent
-                hw_detect_time = get_precise_time()
                 self.midi.update(
                     changes['keys'],
                     changes['pots'],
                     {}  # Empty config since we're not using instrument settings
                 )
-                log(TAG_BARTLEBY, format_processing_time(start_time, "Total time"))
             
             return True
                 

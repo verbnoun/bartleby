@@ -1,6 +1,6 @@
 """State management for timing and scanning intervals."""
 
-from connection import get_precise_time
+import time
 from constants import POT_SCAN_INTERVAL, ENCODER_SCAN_INTERVAL
 from logging import log, TAG_STATE
 
@@ -19,11 +19,11 @@ class StateManager:
         """Update current time reference"""
         try:
             previous_time = self.current_time
-            self.current_time = get_precise_time()
+            self.current_time = time.monotonic()
             
             # Log significant time jumps (more than 1 second)
             if previous_time > 0:  # Skip first update
-                time_jump = (self.current_time - previous_time) / 1_000_000_000  # Convert to seconds
+                time_jump = self.current_time - previous_time
                 if time_jump > 1.0:
                     log(TAG_STATE, f"Time jump detected: {time_jump:.2f}s")
         except Exception as e:
@@ -32,7 +32,7 @@ class StateManager:
     def should_scan_pots(self):
         """Check if enough time has passed to scan pots"""
         try:
-            time_since_scan = (self.current_time - self.last_pot_scan) / 1_000_000_000  # Convert to seconds
+            time_since_scan = self.current_time - self.last_pot_scan
             should_scan = time_since_scan >= POT_SCAN_INTERVAL
             return should_scan
         except Exception as e:
@@ -42,7 +42,7 @@ class StateManager:
     def should_scan_encoders(self):
         """Check if enough time has passed to scan encoders"""
         try:
-            time_since_scan = (self.current_time - self.last_encoder_scan) / 1_000_000_000  # Convert to seconds
+            time_since_scan = self.current_time - self.last_encoder_scan
             should_scan = time_since_scan >= ENCODER_SCAN_INTERVAL
             return should_scan
         except Exception as e:

@@ -8,18 +8,6 @@ from constants import (
 )
 from logging import log, TAG_CONNECT
 
-def get_precise_time():
-    """Get high precision time measurement in nanoseconds"""
-    return time.monotonic_ns()
-
-def format_processing_time(start_time, operation=None):
-    """Format processing time with nanosecond precision and optional operation description"""
-    elapsed_ns = get_precise_time() - start_time
-    elapsed_ms = elapsed_ns / 1_000_000  # Convert ns to ms
-    if operation:
-        return f"{operation} took {elapsed_ms:.3f}ms"
-    return f"Processing took {elapsed_ms:.3f}ms"
-
 class ConnectionManager:
     """
     Manages connection state and handshake protocol for Bartleby (Base Station).

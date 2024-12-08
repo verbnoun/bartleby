@@ -6,7 +6,6 @@ from hardware import (
     Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
     PotentiometerHandler
 )
-from connection import get_precise_time, format_processing_time
 from constants import (
     SETUP_DELAY, DETECT_PIN,
     CONTROL_MUX_SIG, CONTROL_MUX_S0, CONTROL_MUX_S1, CONTROL_MUX_S2, CONTROL_MUX_S3,
@@ -110,31 +109,25 @@ class HardwareCoordinator:
         
         try:
             # Always read keys at full speed
-            start_time = get_precise_time()
             changes['keys'] = self.components['keyboard'].read_keys()
             if changes['keys']:
                 log(TAG_HW, f"Keys changed: {len(changes['keys'])} events")
-                log(TAG_HW, format_processing_time(start_time, "Key state read"))
             
             # Read pots at interval
             if state_manager.should_scan_pots():
-                start_time = get_precise_time()
                 changes['pots'] = self.components['pots'].read_pots()
                 if changes['pots']:
                     log(TAG_HW, f"Pots changed: {len(changes['pots'])} events")
-                    log(TAG_HW, format_processing_time(start_time, "Potentiometer scan"))
                 state_manager.update_pot_scan_time()
             
             # Read encoders at interval
             if state_manager.should_scan_encoders():
-                start_time = get_precise_time()
                 for i in range(self.components['encoders'].num_encoders):
                     new_events = self.components['encoders'].read_encoder(i)
                     if new_events:
                         changes['encoders'].extend(new_events)
                 if changes['encoders']:
                     log(TAG_HW, f"Encoders changed: {len(changes['encoders'])} events")
-                    log(TAG_HW, format_processing_time(start_time, "Encoder scan"))
                 state_manager.update_encoder_scan_time()
                 
             return changes
@@ -145,13 +138,11 @@ class HardwareCoordinator:
     
     def handle_encoder_events(self, encoder_events, midi):
         try:
-            start_time = get_precise_time()
             for event in encoder_events:
                 if event[0] == 'rotation':
                     _, direction = event[1:3]
                     midi.handle_octave_shift(direction)
                     log(TAG_HW, f"Octave shifted {direction}: new position {self.components['encoders'].get_encoder_position(0)}")
-                    log(TAG_HW, format_processing_time(start_time, "Octave shift processing"))
         except Exception as e:
             log(TAG_HW, f"Error handling encoder events: {str(e)}", is_error=True)
     

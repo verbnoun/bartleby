@@ -81,24 +81,24 @@ TAG_COLORS = {
 # Enable flags for each module's logging - Alphabetically ordered
 LOG_ENABLE = {
     TAG_BARTLEBY: True,
-    TAG_CONFIG: True,
-    TAG_CONNECT: True,
-    TAG_CONTROL: True,
-    TAG_COORD: True,
-    TAG_ENCODER: True,
-    TAG_HARDWAR: True,
-    TAG_HW: True,
-    TAG_KEYBD: True,
-    TAG_KEYSTAT: True,
-    TAG_MESSAGE: True,
-    TAG_MIDI: True,
-    TAG_MUX: True,
-    TAG_NOTES: True,
-    TAG_POTS: True,
-    TAG_PRESSUR: True,
-    TAG_STATE: True,
-    TAG_TRANS: True,
-    TAG_ZONES: True
+    TAG_CONFIG: False,
+    TAG_CONNECT: False,
+    TAG_CONTROL: False,
+    TAG_COORD: False,
+    TAG_ENCODER: False,
+    TAG_HARDWAR: False,
+    TAG_HW: False,
+    TAG_KEYBD: False,
+    TAG_KEYSTAT: False,
+    TAG_MESSAGE: False,
+    TAG_MIDI: False,
+    TAG_MUX: False,
+    TAG_NOTES: False,
+    TAG_POTS: False,
+    TAG_PRESSUR: False,
+    TAG_STATE: False,
+    TAG_TRANS: False,
+    TAG_ZONES: False
 }
 
 # Special debug flags

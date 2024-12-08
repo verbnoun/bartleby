@@ -3,7 +3,6 @@
 import busio
 import time
 from constants import MESSAGE_TIMEOUT, BUFFER_CLEAR_TIMEOUT
-from connection import get_precise_time
 from logging import log, TAG_TRANS
 
 class TransportManager:
@@ -43,8 +42,8 @@ class TransportManager:
             
         try:
             log(TAG_TRANS, "Flushing UART buffers")
-            start_time = get_precise_time()
-            while (get_precise_time() - start_time) < (BUFFER_CLEAR_TIMEOUT * 1_000_000_000):  # Convert to ns
+            start_time = time.monotonic()
+            while (time.monotonic() - start_time) < BUFFER_CLEAR_TIMEOUT:
                 if self.uart and self.uart.in_waiting:
                     self.uart.read()
                 else:
@@ -84,15 +83,15 @@ class TextUart:
     def write(self, message):
         """Write text message with minimum delay between writes"""
         try:
-            current_time = get_precise_time()
-            delay_needed = (MESSAGE_TIMEOUT * 1_000_000_000) - (current_time - self.last_write)  # Convert to ns
+            current_time = time.monotonic()
+            delay_needed = MESSAGE_TIMEOUT - (current_time - self.last_write)
             if delay_needed > 0:
-                time.sleep(delay_needed / 1_000_000_000)  # Convert back to seconds
+                time.sleep(delay_needed)
                 
             if isinstance(message, str):
                 message = message.encode('utf-8')
             result = self.uart.write(message)
-            self.last_write = get_precise_time()
+            self.last_write = time.monotonic()
             # Only log non-heartbeat messages by default
             if not message.startswith(b'\xe2\x99\xa1'):  # UTF-8 encoding of ♡
                 log(TAG_TRANS, f"Wrote message of {len(message)} bytes")
