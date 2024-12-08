@@ -7,7 +7,8 @@ from constants import (
     RELEASE_VELOCITY_THRESHOLD,
     PITCH_BEND_CENTER,
     PITCH_BEND_MAX,
-    TIMBRE_CENTER
+    TIMBRE_CENTER,
+    NOTE_MIDI_THRESHOLD
 )
 from logging import log, TAG_NOTES
 
@@ -116,7 +117,7 @@ class MPENoteProcessor:
             for key_id, position, pressure, strike_velocity in changed_keys:
                 note_state = self.channel_manager.get_note_state(key_id)
                 
-                if pressure > 0.01:  # Key is active
+                if pressure > NOTE_MIDI_THRESHOLD:  # Key is active
                     midi_note = self.base_root_note + self.octave_shift * 12 + key_id
                     
                     if not note_state:  # New note
