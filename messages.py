@@ -95,9 +95,8 @@ class MidiTransportManager:
         """Clean shutdown of MIDI transports"""
         try:
             log(TAG_MESSAGE, "Starting MIDI transport cleanup")
-            if self.uart and self.uart_initialized:
-                self.uart.deinit()
-                self.uart_initialized = False
+            # Don't deinit UART here since we don't own it
+            self.uart_initialized = False
             log(TAG_MESSAGE, "MIDI transport cleanup complete")
         except Exception as e:
             log(TAG_MESSAGE, f"Error during MIDI cleanup: {str(e)}", is_error=True)

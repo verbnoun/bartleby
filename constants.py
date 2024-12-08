@@ -2,9 +2,6 @@
 
 import board
 
-# Debug Settings
-DEBUG = True
-
 # Hardware Setup
 SETUP_DELAY = 0.1
 

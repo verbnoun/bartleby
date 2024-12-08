@@ -95,7 +95,7 @@ class ConnectionManager:
             # Remove "cc|" prefix and parse assignments
             config_part = message[3:]
             if not config_part:
-                log(TAG_CONNECT, "Empty config received", is_error=True)
+                log(TAG_CONNECT, "Empty config received")
                 return False
                 
             # Convert the new format to the format expected by MIDI system

@@ -93,7 +93,11 @@ class TextUart:
                 message = message.encode('utf-8')
             result = self.uart.write(message)
             self.last_write = get_precise_time()
-            log(TAG_TRANS, f"Wrote message of {len(message)} bytes")
+            # Only log non-heartbeat messages by default
+            if not message.startswith(b'\xe2\x99\xa1'):  # UTF-8 encoding of ♡
+                log(TAG_TRANS, f"Wrote message of {len(message)} bytes")
+            else:
+                log(TAG_TRANS, "♡", is_heartbeat=True)
             return result
         except Exception as e:
             log(TAG_TRANS, f"Error writing message: {str(e)}", is_error=True)
@@ -125,7 +129,11 @@ class TextUart:
                     
                     # Basic sanity check: message is not empty
                     if decoded_message:
-                        log(TAG_TRANS, f"Received complete message: {len(decoded_message)} chars")
+                        # Check if it's a heartbeat message
+                        if decoded_message.startswith('♡'):
+                            log(TAG_TRANS, "♡", is_heartbeat=True)
+                        else:
+                            log(TAG_TRANS, f"Received complete message: {len(decoded_message)} chars")
                         return decoded_message
                 except UnicodeDecodeError:
                     # If decoding fails, clear buffer to prevent accumulation of garbage

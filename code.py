@@ -9,7 +9,7 @@ from constants import (
     STARTUP_DELAY
 )
 from logging import (
-    log, TAG_MAIN, TAG_HW, TAG_MIDI, TAG_TRANS,
+    log, TAG_BARTLEBY, TAG_HW, TAG_MIDI, TAG_TRANS,
     COLOR_CYAN, COLOR_BLUE, COLOR_MAGENTA, COLOR_GREEN, COLOR_YELLOW, COLOR_RESET
 )
 from connection import get_precise_time, format_processing_time
@@ -41,7 +41,7 @@ class Bartleby:
         _cycle_log("\nWake Up Bartleby!\n")
         try:
             self.state_manager = StateManager()
-            log(TAG_MAIN, "State manager initialized")
+            log(TAG_BARTLEBY, "State manager initialized")
             
             # Initialize shared transport first
             self.transport = TransportManager(
@@ -58,11 +58,11 @@ class Bartleby:
                 transport_manager=self.transport,
                 midi_callback=self._handle_midi_config
             )
-            log(TAG_MAIN, "Transport and MIDI systems initialized")
+            log(TAG_BARTLEBY, "Transport and MIDI systems initialized")
             
             # Initialize hardware first to set up detect pin
             self.hardware = HardwareCoordinator()
-            log(TAG_MAIN, "Hardware coordinator initialized")
+            log(TAG_BARTLEBY, "Hardware coordinator initialized")
             
             # Initialize connection manager with hardware's detect pin
             self.connection_manager = ConnectionManager(
@@ -71,11 +71,11 @@ class Bartleby:
                 self.midi,
                 self.transport
             )
-            log(TAG_MAIN, "Connection manager initialized")
+            log(TAG_BARTLEBY, "Connection manager initialized")
             
             self._setup_initial_state()
         except Exception as e:
-            log(TAG_MAIN, f"Initialization failed: {str(e)}", is_error=True)
+            log(TAG_BARTLEBY, f"Initialization failed: {str(e)}", is_error=True)
             raise
 
     def _handle_midi_config(self, message):
@@ -84,17 +84,17 @@ class Bartleby:
     def _setup_initial_state(self):
         try:
             self.hardware.reset_encoders()
-            log(TAG_MAIN, "Encoders reset")
+            log(TAG_BARTLEBY, "Encoders reset")
             
             # Force read of all pots during initialization but don't send MIDI
             initial_pots = self.hardware.components['pots'].read_all_pots()
-            log(TAG_MAIN, f"Initial pot values read: {initial_pots}")
+            log(TAG_BARTLEBY, f"Initial pot values read: {initial_pots}")
             
             # Add startup delay to ensure both sides are ready
             time.sleep(STARTUP_DELAY)
             _cycle_log("\nBartleby (v1.0) is awake... (◕‿◕✿)\n")
         except Exception as e:
-            log(TAG_MAIN, f"Initial state setup failed: {str(e)}", is_error=True)
+            log(TAG_BARTLEBY, f"Initial state setup failed: {str(e)}", is_error=True)
             raise
 
     def update(self):
@@ -115,10 +115,10 @@ class Bartleby:
                 if message:
                     try:
                         if not message.startswith('♡'):
-                            log(TAG_MAIN, f"Received message: '{message}'")
+                            log(TAG_BARTLEBY, f"Received message: '{message}'")
                         self.connection_manager.handle_message(message)
                     except Exception as e:
-                        log(TAG_MAIN, f"Error processing message '{message}': {str(e)}", is_error=True)
+                        log(TAG_BARTLEBY, f"Error processing message '{message}': {str(e)}", is_error=True)
 
             # Handle encoder events and MIDI updates
             if changes['encoders']:
@@ -133,18 +133,18 @@ class Bartleby:
                     changes['pots'],
                     {}  # Empty config since we're not using instrument settings
                 )
-                log(TAG_MAIN, format_processing_time(start_time, "Total time"))
+                log(TAG_BARTLEBY, format_processing_time(start_time, "Total time"))
             
             return True
                 
         except KeyboardInterrupt:
             return False
         except Exception as e:
-            log(TAG_MAIN, f"Error in main loop: {str(e)}", is_error=True)
+            log(TAG_BARTLEBY, f"Error in main loop: {str(e)}", is_error=True)
             return False
 
     def run(self):
-        log(TAG_MAIN, "Starting main loop...")
+        log(TAG_BARTLEBY, "Starting main loop...")
         try:
             while self.update():
                 time.sleep(MAIN_LOOP_INTERVAL)
@@ -152,7 +152,7 @@ class Bartleby:
             self.cleanup()
 
     def cleanup(self):
-        log(TAG_MAIN, "Starting cleanup sequence...")
+        log(TAG_BARTLEBY, "Starting cleanup sequence...")
         try:
             if hasattr(self.hardware, 'detect_pin'):
                 log(TAG_HW, "Cleaning up hardware...")
@@ -168,7 +168,7 @@ class Bartleby:
                 self.transport.cleanup()
             _cycle_log("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁\n")
         except Exception as e:
-            log(TAG_MAIN, f"Error during cleanup: {str(e)}", is_error=True)
+            log(TAG_BARTLEBY, f"Error during cleanup: {str(e)}", is_error=True)
 
     def play_greeting(self):
         """Play greeting chime using MPE"""
@@ -209,7 +209,7 @@ def main():
         controller = Bartleby()
         controller.run()
     except Exception as e:
-        log(TAG_MAIN, f"Fatal error: {str(e)}", is_error=True)
+        log(TAG_BARTLEBY, f"Fatal error: {str(e)}", is_error=True)
 
 if __name__ == "__main__":
     main()

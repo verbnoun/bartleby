@@ -28,7 +28,8 @@ class HardwareManager:
                 KEYBOARD_L1A_MUX_S0,
                 KEYBOARD_L1A_MUX_S1,
                 KEYBOARD_L1A_MUX_S2,
-                KEYBOARD_L1A_MUX_S3
+                KEYBOARD_L1A_MUX_S3,
+                name="L1A"  # Keys 1-12
             )
             
             log(TAG_HARDWAR, "Setting up keyboard layer 1B multiplexer")
@@ -37,7 +38,8 @@ class HardwareManager:
                 KEYBOARD_L1B_MUX_S0,
                 KEYBOARD_L1B_MUX_S1,
                 KEYBOARD_L1B_MUX_S2,
-                KEYBOARD_L1B_MUX_S3
+                KEYBOARD_L1B_MUX_S3,
+                name="L1B"  # Keys 13-25
             )
             
             log(TAG_HARDWAR, "Setting up control multiplexer")
@@ -46,7 +48,8 @@ class HardwareManager:
                 CONTROL_MUX_S0,
                 CONTROL_MUX_S1,
                 CONTROL_MUX_S2,
-                CONTROL_MUX_S3
+                CONTROL_MUX_S3,
+                name="CTRL"  # Potentiometers
             )
 
             # Initialize keyboard handler

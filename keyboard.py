@@ -51,7 +51,8 @@ class KeyboardHandler:
         
         try:
             # Read first group (keys 1-5) from L2 Mux A through L1 Mux A channel 0
-            for channel in range(1, 11, 2):
+            # Optimized: Skip ch0 (empty) and only scan up to ch10 (5 key pairs)
+            for channel in range(1, 10, 2):
                 self.set_l2_channel(channel)
                 left_value = self.l1a_mux.read_channel(0)
                 
@@ -78,7 +79,8 @@ class KeyboardHandler:
                 key_index += 1
                 
             # Read final group (keys 20-25) from L2 Mux B through L1 Mux B channel 0
-            for channel in range(1, 13, 2):
+            # Optimized: Skip ch0 (empty) and only scan up to ch12 (6 key pairs)
+            for channel in range(1, 12, 2):
                 self.set_l2_channel(channel)
                 left_value = self.l1b_mux.read_channel(0)
                 

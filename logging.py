@@ -45,7 +45,6 @@ TAG_HARDWAR = 'HARDWAR'    # hardware.py
 TAG_HW = 'HW      '     # Hardware operations
 TAG_KEYBD = 'KEYBD   '     # keyboard.py
 TAG_KEYSTAT = 'KEYSTAT '   # keystates.py
-TAG_MAIN = 'MAIN    '    # Main program flow
 TAG_MESSAGE = 'MESSAGE '   # messages.py
 TAG_MIDI = 'MIDI    '     # midi.py
 TAG_MUX = 'MUX     '     # mux.py
@@ -68,7 +67,6 @@ TAG_COLORS = {
     TAG_HW: COLOR_GOLD,             # Hardware ops - Gold
     TAG_KEYBD: COLOR_PINK,          # keyboard.py - Pink
     TAG_KEYSTAT: COLOR_CORAL,       # keystates.py - Coral
-    TAG_MAIN: COLOR_AZURE,          # Main flow - Azure
     TAG_MESSAGE: COLOR_MINT,        # messages.py - Mint
     TAG_MIDI: COLOR_PERIWINKLE,     # midi.py - Periwinkle
     TAG_MUX: COLOR_MAUVE,           # mux.py - Mauve
@@ -92,7 +90,6 @@ LOG_ENABLE = {
     TAG_HW: True,
     TAG_KEYBD: True,
     TAG_KEYSTAT: True,
-    TAG_MAIN: True,
     TAG_MESSAGE: True,
     TAG_MIDI: True,
     TAG_MUX: True,

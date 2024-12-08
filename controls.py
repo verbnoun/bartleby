@@ -1,8 +1,8 @@
 from constants import (
-    DEBUG,
     DEFAULT_CC_ASSIGNMENTS,
     ZONE_MANAGER
 )
+from logging import log, TAG_CONTROL
 
 class ControllerManager:
     """Manages controller assignments and configuration for pots"""
@@ -12,8 +12,7 @@ class ControllerManager:
     def reset_to_defaults(self):
         """Reset all controller assignments to default values"""
         self.controller_assignments = DEFAULT_CC_ASSIGNMENTS.copy()
-        if DEBUG:
-            print("Controller assignments reset to defaults")
+        log(TAG_CONTROL, "Controller assignments reset to defaults")
 
     def get_controller_for_pot(self, pot_number):
         """Get the controller number assigned to a pot"""
@@ -48,14 +47,12 @@ class ControllerManager:
                 
                 if 0 <= pot_num <= 13 and 0 <= cc_num <= 127:
                     self.controller_assignments[pot_num] = cc_num
-                    if DEBUG:
-                        print(f"Assigned Pot {pot_num} to CC {cc_num}")
+                    log(TAG_CONTROL, f"Assigned Pot {pot_num} to CC {cc_num}")
 
             # Ensure all pots after the last assigned one are set to CC0
             for i in range(max_pot + 1, 14):
                 self.controller_assignments[i] = 0
-                if DEBUG:
-                    print(f"Set Pot {i} to CC0 (unassigned)")
+                log(TAG_CONTROL, f"Set Pot {i} to CC0 (unassigned)")
 
             return True
 
@@ -75,8 +72,7 @@ class MidiControlProcessor:
             controller_number = self.controller_config.get_controller_for_pot(pot_index)
             midi_value = int(new_value * 127)
             midi_events.append(('control_change', controller_number, midi_value))
-            if DEBUG:
-                print(f"Controller {pot_index} changed: CC{controller_number}={midi_value}")
+            log(TAG_CONTROL, f"Controller {pot_index} changed: CC{controller_number}={midi_value}")
         return midi_events
 
     def handle_config_message(self, message):

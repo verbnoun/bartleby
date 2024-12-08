@@ -6,14 +6,14 @@ import analogio
 from logging import log, TAG_MUX
 
 class Multiplexer:
-    def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin):
+    def __init__(self, sig_pin, s0_pin, s1_pin, s2_pin, s3_pin, name=""):
         """Initialize multiplexer with signal and select pins"""
         try:
-            log(TAG_MUX, "Initializing multiplexer")
+            self.name = name
+            log(TAG_MUX, f"{self.name} Initializing multiplexer")
             self.sig = analogio.AnalogIn(sig_pin)
             
             # Order pins from LSB to MSB (S0 to S3)
-            log(TAG_MUX, "Setting up select pins")
             self.select_pins = [
                 digitalio.DigitalInOut(pin) for pin in (s0_pin, s1_pin, s2_pin, s3_pin)
             ]
@@ -21,9 +21,9 @@ class Multiplexer:
                 pin.direction = digitalio.Direction.OUTPUT
                 pin.value = False  # Initialize all pins to 0
                 
-            log(TAG_MUX, "Multiplexer initialization complete")
+            log(TAG_MUX, f"{self.name} Multiplexer initialization complete")
         except Exception as e:
-            log(TAG_MUX, f"Failed to initialize multiplexer: {str(e)}", is_error=True)
+            log(TAG_MUX, f"{self.name} Failed to initialize multiplexer: {str(e)}", is_error=True)
             raise
 
     def select_channel(self, channel):
@@ -35,7 +35,7 @@ class Multiplexer:
                 self.select_pins[i].value = bool((channel >> i) & 1)
             time.sleep(0.0001)  # Small delay to allow mux to settle
         except Exception as e:
-            log(TAG_MUX, f"Error selecting channel {channel}: {str(e)}", is_error=True)
+            log(TAG_MUX, f"{self.name} Error selecting channel {channel}: {str(e)}", is_error=True)
 
     def read_channel(self, channel):
         """Read value from specified multiplexer channel"""
@@ -43,19 +43,12 @@ class Multiplexer:
             if 0 <= channel < 16:  # Ensure channel is in valid range
                 self.select_channel(channel)
                 value = self.sig.value
-                
-                # Log unusual readings
-                if value == 0:
-                    log(TAG_MUX, f"Zero reading on channel {channel}")
-                elif value == 65535:  # Max ADC value
-                    log(TAG_MUX, f"Maximum reading on channel {channel}")
-                    
                 return value
             else:
-                log(TAG_MUX, f"Invalid channel number: {channel}", is_error=True)
+                log(TAG_MUX, f"{self.name} Invalid channel number: {channel}", is_error=True)
                 return 0
         except Exception as e:
-            log(TAG_MUX, f"Error reading channel {channel}: {str(e)}", is_error=True)
+            log(TAG_MUX, f"{self.name} Error reading channel {channel}: {str(e)}", is_error=True)
             return 0
 
 class KeyMultiplexer:
