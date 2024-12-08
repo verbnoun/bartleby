@@ -1,23 +1,9 @@
 import board
 import time
-
-class Constants:
-    DEBUG = True
-    SEE_HEARTBEAT = False
-    
-    # Connection
-    DETECT_PIN = board.GP22
-    COMMUNICATION_TIMEOUT = 5.0  # Time without any message before disconnect
-    
-    # Timing Constants
-    STARTUP_DELAY = 1.0  # Give devices time to initialize
-    BUFFER_CLEAR_TIMEOUT = 0.1  # Time to wait for buffer clearing
-    
-    # Message Types
-    MSG_CONFIG = "cc|"
-    
-    # Timing precision
-    TIME_PRECISION = 9  # Nanosecond precision
+from constants import (
+    DEBUG, DETECT_PIN, COMMUNICATION_TIMEOUT, STARTUP_DELAY,
+    BUFFER_CLEAR_TIMEOUT, MSG_CONFIG
+)
 
 def get_precise_time():
     """Get high precision time measurement in nanoseconds"""
@@ -67,7 +53,7 @@ class ConnectionManager:
         if self.state != self.STANDALONE:
             current_time = time.monotonic()
             time_since_last = current_time - self.last_message_time
-            if time_since_last > Constants.COMMUNICATION_TIMEOUT:
+            if time_since_last > COMMUNICATION_TIMEOUT:
                 _log(f"Communication timeout ({time_since_last:.1f}s) - returning to standalone", "-> STANDALONE")
                 self._reset_state()
                 
@@ -81,7 +67,7 @@ class ConnectionManager:
         
         try:
             # Handle config message
-            if message.startswith(Constants.MSG_CONFIG):
+            if message.startswith(MSG_CONFIG):
                 if self.state == self.STANDALONE:
                     _log("Config received - parsing CC mapping", "STANDALONE -> CONNECTED")
                 else:
@@ -95,7 +81,7 @@ class ConnectionManager:
                 
             # Handle heartbeat
             if message.startswith("♡"):
-                if Constants.SEE_HEARTBEAT and Constants.DEBUG:
+                if DEBUG:
                     _log("♡", "CONNECTED")
                 return
                 
@@ -134,7 +120,7 @@ class ConnectionManager:
                         continue
                 
                 # Debug output
-                if Constants.DEBUG and self.cc_mapping:
+                if DEBUG and self.cc_mapping:
                     print("\nReceived CC Configuration:")
                     for pot_num, mapping in self.cc_mapping.items():
                         print(f"Pot {pot_num}: CC {mapping['cc']}")
