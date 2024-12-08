@@ -1,9 +1,12 @@
+"""Connection management and handshake protocol for Bartleby."""
+
 import board
 import time
 from constants import (
-    DEBUG, DETECT_PIN, COMMUNICATION_TIMEOUT, STARTUP_DELAY,
+    DETECT_PIN, COMMUNICATION_TIMEOUT, STARTUP_DELAY,
     BUFFER_CLEAR_TIMEOUT, MSG_CONFIG
 )
+from logging import log, TAG_CONNECT
 
 def get_precise_time():
     """Get high precision time measurement in nanoseconds"""
@@ -17,13 +20,6 @@ def format_processing_time(start_time, operation=None):
         return f"{operation} took {elapsed_ms:.3f}ms"
     return f"Processing took {elapsed_ms:.3f}ms"
 
-def _log(message, state=None):
-    """Log messages with optional state transition info"""
-    if state:
-        print(f"[STATE] {state}: {message}")
-    else:
-        print(message)
-
 class ConnectionManager:
     """
     Manages connection state and handshake protocol for Bartleby (Base Station).
@@ -34,19 +30,23 @@ class ConnectionManager:
     CONNECTED = 1       # Fully connected and operational
     
     def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager):
-        self.uart = text_uart
-        self.hardware = hardware_coordinator
-        self.midi = midi_logic
-        self.transport = transport_manager
-        
-        # Connection state
-        self.state = self.STANDALONE
-        self.last_message_time = time.monotonic()
-        
-        # Store CC mapping
-        self.cc_mapping = {}  # Format: {pot_number: {'cc': cc_number}}
-        
-        _log("Bartleby connection manager initialized - listening for Candide", "STANDALONE")
+        try:
+            self.uart = text_uart
+            self.hardware = hardware_coordinator
+            self.midi = midi_logic
+            self.transport = transport_manager
+            
+            # Connection state
+            self.state = self.STANDALONE
+            self.last_message_time = time.monotonic()
+            
+            # Store CC mapping
+            self.cc_mapping = {}  # Format: {pot_number: {'cc': cc_number}}
+            
+            log(TAG_CONNECT, "Connection manager initialized - listening for Candide")
+        except Exception as e:
+            log(TAG_CONNECT, f"Failed to initialize connection manager: {str(e)}", is_error=True)
+            raise
         
     def update_state(self):
         """Check for timeouts"""
@@ -54,7 +54,7 @@ class ConnectionManager:
             current_time = time.monotonic()
             time_since_last = current_time - self.last_message_time
             if time_since_last > COMMUNICATION_TIMEOUT:
-                _log(f"Communication timeout ({time_since_last:.1f}s) - returning to standalone", "-> STANDALONE")
+                log(TAG_CONNECT, f"Communication timeout ({time_since_last:.1f}s) - returning to standalone")
                 self._reset_state()
                 
     def handle_message(self, message):
@@ -69,9 +69,9 @@ class ConnectionManager:
             # Handle config message
             if message.startswith(MSG_CONFIG):
                 if self.state == self.STANDALONE:
-                    _log("Config received - parsing CC mapping", "STANDALONE -> CONNECTED")
+                    log(TAG_CONNECT, "Config received - parsing CC mapping")
                 else:
-                    _log("Config update received - applying new CC mapping", "CONNECTED")
+                    log(TAG_CONNECT, "Config update received - applying new CC mapping")
                 
                 # Parse config and send pot values
                 if self._parse_cc_config(message):
@@ -81,12 +81,11 @@ class ConnectionManager:
                 
             # Handle heartbeat
             if message.startswith("♡"):
-                if DEBUG:
-                    _log("♡", "CONNECTED")
+                log(TAG_CONNECT, "♡", is_heartbeat=True)
                 return
                 
         except Exception as e:
-            print(f"Error in message reading: {str(e)}")
+            log(TAG_CONNECT, f"Error processing message: {str(e)}", is_error=True)
             
     def _parse_cc_config(self, message):
         """Parse CC configuration message"""
@@ -96,6 +95,7 @@ class ConnectionManager:
             # Remove "cc|" prefix and parse assignments
             config_part = message[3:]
             if not config_part:
+                log(TAG_CONNECT, "Empty config received", is_error=True)
                 return False
                 
             # Convert the new format to the format expected by MIDI system
@@ -116,22 +116,16 @@ class ConnectionManager:
                         cc_num = int(cc_part)
                         self.cc_mapping[pot_num] = {'cc': cc_num}
                     except (ValueError, IndexError) as e:
-                        print(f"Error parsing CC assignment '{assignment}': {e}")
+                        log(TAG_CONNECT, f"Error parsing CC assignment '{assignment}': {str(e)}", is_error=True)
                         continue
                 
-                # Debug output
-                if DEBUG and self.cc_mapping:
-                    print("\nReceived CC Configuration:")
-                    for pot_num, mapping in self.cc_mapping.items():
-                        print(f"Pot {pot_num}: CC {mapping['cc']}")
-                    print()
-                
+                log(TAG_CONNECT, f"CC Configuration parsed: {len(self.cc_mapping)} mappings")
                 return True
             
             return False
             
         except Exception as e:
-            print(f"Failed to parse config: {str(e)}")
+            log(TAG_CONNECT, f"Failed to parse config: {str(e)}", is_error=True)
             return False
             
     def _send_pot_values(self):
@@ -148,22 +142,30 @@ class ConnectionManager:
             # Send pot values
             if pot_changes:
                 self.midi.update([], pot_changes, {})
-                _log(f"Sent {len(pot_changes)} pot values", "CONNECTED")
+                log(TAG_CONNECT, f"Sent {len(pot_changes)} pot values")
                 
         except Exception as e:
-            print(f"Failed to send pot values: {str(e)}")
+            log(TAG_CONNECT, f"Failed to send pot values: {str(e)}", is_error=True)
             
     def _reset_state(self):
         """Reset to initial state"""
-        self.state = self.STANDALONE
-        self.last_message_time = time.monotonic()
-        self.cc_mapping.clear()
-        self.transport.flush_buffers()
-        _log("Reset to initial state", "-> STANDALONE")
+        try:
+            self.state = self.STANDALONE
+            self.last_message_time = time.monotonic()
+            self.cc_mapping.clear()
+            self.transport.flush_buffers()
+            log(TAG_CONNECT, "Reset to initial state")
+        except Exception as e:
+            log(TAG_CONNECT, f"Error during state reset: {str(e)}", is_error=True)
         
     def cleanup(self):
         """Clean up resources"""
-        self._reset_state()
+        log(TAG_CONNECT, "Starting connection cleanup")
+        try:
+            self._reset_state()
+            log(TAG_CONNECT, "Connection cleanup complete")
+        except Exception as e:
+            log(TAG_CONNECT, f"Error during cleanup: {str(e)}", is_error=True)
         
     def is_connected(self):
         """Check if fully connected"""

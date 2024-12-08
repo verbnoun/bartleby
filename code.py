@@ -1,10 +1,17 @@
+"""Main program entry point for Bartleby synthesizer."""
+
 import time
+import sys
+import random
 from constants import (
-    DEBUG, MAIN_LOOP_INTERVAL, UART_TX, UART_RX,
+    MAIN_LOOP_INTERVAL, UART_TX, UART_RX,
     UART_BAUDRATE, UART_TIMEOUT, CC_TIMBRE, TIMBRE_CENTER,
     STARTUP_DELAY
 )
-from logging import log, TAG_MAIN, TAG_HW, TAG_MIDI, TAG_TRANS
+from logging import (
+    log, TAG_MAIN, TAG_HW, TAG_MIDI, TAG_TRANS,
+    COLOR_CYAN, COLOR_BLUE, COLOR_MAGENTA, COLOR_GREEN, COLOR_YELLOW, COLOR_RESET
+)
 from connection import get_precise_time, format_processing_time
 from transport import TransportManager, TextUart
 from state import StateManager
@@ -12,56 +19,83 @@ from coordinator import HardwareCoordinator
 from connection import ConnectionManager
 from midi import MidiLogic
 
+def _cycle_log(message):
+    """Special logging effect for startup messages."""
+    COLORS = [COLOR_CYAN, COLOR_BLUE, COLOR_MAGENTA, COLOR_GREEN, COLOR_YELLOW]
+    
+    print("\033[s", end='', file=sys.stderr)
+    
+    for i in range(10):
+        colored_text = ""
+        for char in message:
+            colored_text += random.choice(COLORS) + char
+        
+        if i == 0:
+            print(f"{colored_text}{COLOR_RESET}", file=sys.stderr)
+        else:
+            print(f"\033[u\033[K{colored_text}{COLOR_RESET}", file=sys.stderr)
+        time.sleep(0.1)
+
 class Bartleby:
     def __init__(self):
-        print("\nWake Up Bartleby!")  # Keep critical system message
-        self.state_manager = StateManager()
-        
-        # Initialize shared transport first
-        self.transport = TransportManager(
-            tx_pin=UART_TX,
-            rx_pin=UART_RX,
-            baudrate=UART_BAUDRATE,
-            timeout=UART_TIMEOUT
-        )
-        
-        # Get shared UART for text and MIDI
-        shared_uart = self.transport.get_uart()
-        self.text_uart = TextUart(shared_uart)
-        self.midi = MidiLogic(
-            transport_manager=self.transport,
-            midi_callback=self._handle_midi_config
-        )
-        
-        # Initialize hardware first to set up detect pin
-        self.hardware = HardwareCoordinator()
-        
-        # Initialize connection manager with hardware's detect pin
-        self.connection_manager = ConnectionManager(
-            self.text_uart,
-            self.hardware,
-            self.midi,
-            self.transport
-        )
-        
-        self._setup_initial_state()
+        _cycle_log("\nWake Up Bartleby!\n")
+        try:
+            self.state_manager = StateManager()
+            log(TAG_MAIN, "State manager initialized")
+            
+            # Initialize shared transport first
+            self.transport = TransportManager(
+                tx_pin=UART_TX,
+                rx_pin=UART_RX,
+                baudrate=UART_BAUDRATE,
+                timeout=UART_TIMEOUT
+            )
+            
+            # Get shared UART for text and MIDI
+            shared_uart = self.transport.get_uart()
+            self.text_uart = TextUart(shared_uart)
+            self.midi = MidiLogic(
+                transport_manager=self.transport,
+                midi_callback=self._handle_midi_config
+            )
+            log(TAG_MAIN, "Transport and MIDI systems initialized")
+            
+            # Initialize hardware first to set up detect pin
+            self.hardware = HardwareCoordinator()
+            log(TAG_MAIN, "Hardware coordinator initialized")
+            
+            # Initialize connection manager with hardware's detect pin
+            self.connection_manager = ConnectionManager(
+                self.text_uart,
+                self.hardware,
+                self.midi,
+                self.transport
+            )
+            log(TAG_MAIN, "Connection manager initialized")
+            
+            self._setup_initial_state()
+        except Exception as e:
+            log(TAG_MAIN, f"Initialization failed: {str(e)}", is_error=True)
+            raise
 
     def _handle_midi_config(self, message):
         self.connection_manager.handle_message(message)
 
     def _setup_initial_state(self):
-        self.hardware.reset_encoders()
-        
-        # Force read of all pots during initialization but don't send MIDI
-        initial_pots = self.hardware.components['pots'].read_all_pots()
-        
-        # Log initial pot values for debugging only
-        if initial_pots and DEBUG:
+        try:
+            self.hardware.reset_encoders()
+            log(TAG_MAIN, "Encoders reset")
+            
+            # Force read of all pots during initialization but don't send MIDI
+            initial_pots = self.hardware.components['pots'].read_all_pots()
             log(TAG_MAIN, f"Initial pot values read: {initial_pots}")
-        
-        # Add startup delay to ensure both sides are ready
-        time.sleep(STARTUP_DELAY)
-        print("\nBartleby (v1.0) is awake... (◕‿◕✿)")  # Keep critical system message
+            
+            # Add startup delay to ensure both sides are ready
+            time.sleep(STARTUP_DELAY)
+            _cycle_log("\nBartleby (v1.0) is awake... (◕‿◕✿)\n")
+        except Exception as e:
+            log(TAG_MAIN, f"Initial state setup failed: {str(e)}", is_error=True)
+            raise
 
     def update(self):
         try:
@@ -80,12 +114,11 @@ class Bartleby:
                 message = self.text_uart.read()
                 if message:
                     try:
-                        if DEBUG and not message.startswith('♡'):
+                        if not message.startswith('♡'):
                             log(TAG_MAIN, f"Received message: '{message}'")
                         self.connection_manager.handle_message(message)
                     except Exception as e:
-                        if str(e):
-                            log(TAG_MAIN, f"Received non-text data: {message}", is_error=True)
+                        log(TAG_MAIN, f"Error processing message '{message}': {str(e)}", is_error=True)
 
             # Handle encoder events and MIDI updates
             if changes['encoders']:
@@ -100,8 +133,7 @@ class Bartleby:
                     changes['pots'],
                     {}  # Empty config since we're not using instrument settings
                 )
-                if DEBUG:
-                    log(TAG_MAIN, format_processing_time(start_time, "Total time"))
+                log(TAG_MAIN, format_processing_time(start_time, "Total time"))
             
             return True
                 
@@ -112,7 +144,7 @@ class Bartleby:
             return False
 
     def run(self):
-        print("Starting main loop...")  # Keep critical system message
+        log(TAG_MAIN, "Starting main loop...")
         try:
             while self.update():
                 time.sleep(MAIN_LOOP_INTERVAL)
@@ -120,55 +152,64 @@ class Bartleby:
             self.cleanup()
 
     def cleanup(self):
-        print("Starting cleanup sequence...")  # Keep critical system message
-        if hasattr(self.hardware, 'detect_pin'):
-            log(TAG_HW, "Cleaning up hardware...")
-            self.hardware.detect_pin.value = False
-            self.hardware.detect_pin.deinit()
-        if self.connection_manager:
-            self.connection_manager.cleanup()
-        if self.midi:
-            log(TAG_MIDI, "Cleaning up MIDI...")
-            self.midi.cleanup()
-        if self.transport:
-            log(TAG_TRANS, "Cleaning up transport...")
-            self.transport.cleanup()
-        print("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁")  # Keep critical system message
+        log(TAG_MAIN, "Starting cleanup sequence...")
+        try:
+            if hasattr(self.hardware, 'detect_pin'):
+                log(TAG_HW, "Cleaning up hardware...")
+                self.hardware.detect_pin.value = False
+                self.hardware.detect_pin.deinit()
+            if self.connection_manager:
+                self.connection_manager.cleanup()
+            if self.midi:
+                log(TAG_MIDI, "Cleaning up MIDI...")
+                self.midi.cleanup()
+            if self.transport:
+                log(TAG_TRANS, "Cleaning up transport...")
+                self.transport.cleanup()
+            _cycle_log("\nBartleby goes to sleep... ( ◡_◡)ᶻ 𝗓 𐰁\n")
+        except Exception as e:
+            log(TAG_MAIN, f"Error during cleanup: {str(e)}", is_error=True)
 
     def play_greeting(self):
         """Play greeting chime using MPE"""
-        if DEBUG:
-            log(TAG_MIDI, "Playing MPE greeting sequence")
+        log(TAG_MIDI, "Playing MPE greeting sequence")
+        try:    
+            base_key_id = -1
+            base_pressure = 0.75
             
-        base_key_id = -1
-        base_pressure = 0.75
-        
-        greeting_notes = [60, 64, 67, 72]
-        velocities = [0.6, 0.7, 0.8, 0.9]
-        durations = [0.2, 0.2, 0.2, 0.4]
-        
-        for idx, (note, velocity, duration) in enumerate(zip(greeting_notes, velocities, durations)):
-            key_id = base_key_id - idx
-            channel = self.midi.channel_manager.allocate_channel(key_id)
-            note_state = self.midi.channel_manager.add_note(key_id, note, channel, int(velocity * 127))
+            greeting_notes = [60, 64, 67, 72]
+            velocities = [0.6, 0.7, 0.8, 0.9]
+            durations = [0.2, 0.2, 0.2, 0.4]
             
-            # Send in MPE order: CC74 → Pressure → Pitch Bend → Note On
-            self.midi.message_sender.send_message([0xB0 | channel, CC_TIMBRE, TIMBRE_CENTER])
-            self.midi.message_sender.send_message([0xD0 | channel, int(base_pressure * 127)])
-            self.midi.message_sender.send_message([0xE0 | channel, 0x00, 0x40])  # Center pitch bend
-            self.midi.message_sender.send_message([0x90 | channel, note, int(velocity * 127)])
-            
-            time.sleep(duration)
-            
-            self.midi.message_sender.send_message([0xD0 | channel, 0])  # Zero pressure
-            self.midi.message_sender.send_message([0x80 | channel, note, 0])
-            self.midi.channel_manager.release_note(key_id)
-            
-            time.sleep(0.05)
+            for idx, (note, velocity, duration) in enumerate(zip(greeting_notes, velocities, durations)):
+                key_id = base_key_id - idx
+                channel = self.midi.channel_manager.allocate_channel(key_id)
+                note_state = self.midi.channel_manager.add_note(key_id, note, channel, int(velocity * 127))
+                
+                # Send in MPE order: CC74 → Pressure → Pitch Bend → Note On
+                self.midi.message_sender.send_message([0xB0 | channel, CC_TIMBRE, TIMBRE_CENTER])
+                self.midi.message_sender.send_message([0xD0 | channel, int(base_pressure * 127)])
+                self.midi.message_sender.send_message([0xE0 | channel, 0x00, 0x40])  # Center pitch bend
+                self.midi.message_sender.send_message([0x90 | channel, note, int(velocity * 127)])
+                
+                time.sleep(duration)
+                
+                self.midi.message_sender.send_message([0xD0 | channel, 0])  # Zero pressure
+                self.midi.message_sender.send_message([0x80 | channel, note, 0])
+                self.midi.channel_manager.release_note(key_id)
+                
+                time.sleep(0.05)
+                
+                log(TAG_MIDI, f"Played greeting note {idx+1}/4: {note}")
+        except Exception as e:
+            log(TAG_MIDI, f"Error playing greeting sequence: {str(e)}", is_error=True)
 
 def main():
-    controller = Bartleby()
-    controller.run()
+    try:
+        controller = Bartleby()
+        controller.run()
+    except Exception as e:
+        log(TAG_MAIN, f"Fatal error: {str(e)}", is_error=True)
 
 if __name__ == "__main__":
     main()

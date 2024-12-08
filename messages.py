@@ -1,3 +1,5 @@
+"""MIDI message routing and transport management."""
+
 import time
 import busio
 import adafruit_midi
@@ -8,46 +10,51 @@ from adafruit_midi.pitch_bend import PitchBend
 from adafruit_midi.control_change import ControlChange
 from adafruit_midi.channel_pressure import ChannelPressure
 from constants import (
-    DEBUG,
     UART_BAUDRATE,
     UART_TIMEOUT,
     ZONE_MANAGER,
     PITCH_BEND_MAX
 )
+from logging import log, TAG_MESSAGE
 
 class MidiTransportManager:
     """Manages MIDI output streams using both UART and USB MIDI"""
     def __init__(self, transport_manager, midi_callback=None):
-        # Initialize UART MIDI
-        self.uart = transport_manager.get_uart()
-        self.uart_midi = adafruit_midi.MIDI(
-            midi_out=self.uart, 
-            out_channel=ZONE_MANAGER
-        )
-        self.uart_initialized = True
-        
-        # Initialize USB MIDI
         try:
-            self.usb_midi = adafruit_midi.MIDI(
-                midi_out=usb_midi.ports[1],
+            log(TAG_MESSAGE, "Initializing MIDI transport manager")
+            # Initialize UART MIDI
+            self.uart = transport_manager.get_uart()
+            self.uart_midi = adafruit_midi.MIDI(
+                midi_out=self.uart, 
                 out_channel=ZONE_MANAGER
             )
-            self.usb_initialized = True
-            print("USB MIDI initialized")
-        except Exception as e:
-            print(f"USB MIDI initialization failed: {str(e)}")
-            self.usb_initialized = False
+            self.uart_initialized = True
+            log(TAG_MESSAGE, "UART MIDI initialized")
             
-        self.midi_callback = midi_callback
-        print("MIDI transport initialized (UART + USB)")
+            # Initialize USB MIDI
+            try:
+                self.usb_midi = adafruit_midi.MIDI(
+                    midi_out=usb_midi.ports[1],
+                    out_channel=ZONE_MANAGER
+                )
+                self.usb_initialized = True
+                log(TAG_MESSAGE, "USB MIDI initialized")
+            except Exception as e:
+                log(TAG_MESSAGE, f"USB MIDI initialization failed: {str(e)}", is_error=True)
+                self.usb_initialized = False
+                
+            self.midi_callback = midi_callback
+            log(TAG_MESSAGE, "MIDI transport initialization complete")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Failed to initialize MIDI transport: {str(e)}", is_error=True)
+            raise
 
     def send_message(self, message):
         """Send MIDI message to both UART and USB MIDI outputs"""
         try:
             if isinstance(message, list):
-                # Debug logging for raw MIDI message
-                if DEBUG:
-                    print(f"Raw MIDI Message: {[hex(x) for x in message]}")
+                # Log MIDI message
+                log(TAG_MESSAGE, f"Sending MIDI: {[hex(x) for x in message]}")
                 
                 # Send raw bytes directly to transports
                 if self.uart_initialized:
@@ -55,35 +62,55 @@ class MidiTransportManager:
                 if self.usb_initialized:
                     usb_midi.ports[1].write(bytes(message))
             else:
-                # Fallback for direct message sending (though this path might need revision)
+                # Fallback for direct message sending
                 if self.uart_initialized:
                     self.uart_midi.send(message)
                 if self.usb_initialized:
                     self.usb_midi.send(message)
                     
         except Exception as e:
-            print(f"Error sending MIDI message: {str(e)}")
+            log(TAG_MESSAGE, f"Error sending MIDI message: {str(e)}", is_error=True)
 
     def read(self, size=None):
         """Read from UART"""
-        return self.uart.read(size)
+        try:
+            data = self.uart.read(size)
+            if data:
+                log(TAG_MESSAGE, f"Read {len(data)} bytes from UART")
+            return data
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error reading from UART: {str(e)}", is_error=True)
+            return None
 
     @property
     def in_waiting(self):
         """Check bytes waiting"""
-        return self.uart.in_waiting
+        try:
+            return self.uart.in_waiting
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error checking in_waiting: {str(e)}", is_error=True)
+            return 0
 
     def cleanup(self):
         """Clean shutdown of MIDI transports"""
-        if self.uart and self.uart_initialized:
-            self.uart.deinit()
-            self.uart_initialized = False
-        print("MIDI transport cleaned up")
+        try:
+            log(TAG_MESSAGE, "Starting MIDI transport cleanup")
+            if self.uart and self.uart_initialized:
+                self.uart.deinit()
+                self.uart_initialized = False
+            log(TAG_MESSAGE, "MIDI transport cleanup complete")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error during MIDI cleanup: {str(e)}", is_error=True)
 
 class MidiMessageSender:
     """Handles the actual sending of MIDI messages"""
     def __init__(self, transport):
-        self.transport = transport
+        try:
+            log(TAG_MESSAGE, "Initializing MIDI message sender")
+            self.transport = transport
+        except Exception as e:
+            log(TAG_MESSAGE, f"Failed to initialize message sender: {str(e)}", is_error=True)
+            raise
 
     def send_message(self, message):
         """Send a MIDI message directly"""
@@ -92,76 +119,121 @@ class MidiMessageSender:
 class MidiEventRouter:
     """Routes and processes MIDI events"""
     def __init__(self, message_sender, channel_manager):
-        self.message_sender = message_sender
-        self.channel_manager = channel_manager
+        try:
+            log(TAG_MESSAGE, "Initializing MIDI event router")
+            self.message_sender = message_sender
+            self.channel_manager = channel_manager
+        except Exception as e:
+            log(TAG_MESSAGE, f"Failed to initialize event router: {str(e)}", is_error=True)
+            raise
 
     def handle_event(self, event):
         """Handle a MIDI event"""
-        event_type = event[0]
-        params = event[1:]
-        
-        if event_type == 'pressure_init':
-            self._handle_pressure_init(*params)
-        elif event_type == 'pressure_update':
-            self._handle_pressure_update(*params)
-        elif event_type == 'pitch_bend_init':
-            self._handle_pitch_bend_init(*params)
-        elif event_type == 'pitch_bend_update':
-            self._handle_pitch_bend_update(*params)
-        elif event_type == 'note_on':
-            self._handle_note_on(*params)
-        elif event_type == 'note_off':
-            self._handle_note_off(*params)
-        elif event_type == 'control_change':
-            self._handle_control_change(*params)
+        try:
+            event_type = event[0]
+            params = event[1:]
+            
+            log(TAG_MESSAGE, f"Processing event: {event_type}")
+            
+            if event_type == 'pressure_init':
+                self._handle_pressure_init(*params)
+            elif event_type == 'pressure_update':
+                self._handle_pressure_update(*params)
+            elif event_type == 'pitch_bend_init':
+                self._handle_pitch_bend_init(*params)
+            elif event_type == 'pitch_bend_update':
+                self._handle_pitch_bend_update(*params)
+            elif event_type == 'note_on':
+                self._handle_note_on(*params)
+            elif event_type == 'note_off':
+                self._handle_note_off(*params)
+            elif event_type == 'control_change':
+                self._handle_control_change(*params)
+            else:
+                log(TAG_MESSAGE, f"Unknown event type: {event_type}", is_error=True)
+                
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error handling event {event}: {str(e)}", is_error=True)
 
     def _handle_pressure_init(self, key_id, pressure):
-        channel = self.channel_manager.allocate_channel(key_id)
-        pressure_value = int(pressure * 127)
-        self.message_sender.send_message([0xD0 | channel, pressure_value])
+        try:
+            channel = self.channel_manager.allocate_channel(key_id)
+            pressure_value = int(pressure * 127)
+            self.message_sender.send_message([0xD0 | channel, pressure_value])
+            log(TAG_MESSAGE, f"Initialized pressure: key={key_id}, channel={channel}, value={pressure_value}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error initializing pressure: {str(e)}", is_error=True)
 
     def _handle_pressure_update(self, key_id, pressure):
-        note_state = self.channel_manager.get_note_state(key_id)
-        if note_state:
-            pressure_value = int(pressure * 127)
-            # Only send if pressure has changed
-            if pressure_value != note_state.pressure:
-                self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
-                note_state.pressure = pressure_value
+        try:
+            note_state = self.channel_manager.get_note_state(key_id)
+            if note_state:
+                pressure_value = int(pressure * 127)
+                # Only send if pressure has changed
+                if pressure_value != note_state.pressure:
+                    self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
+                    note_state.pressure = pressure_value
+                    log(TAG_MESSAGE, f"Updated pressure: key={key_id}, channel={note_state.channel}, value={pressure_value}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error updating pressure: {str(e)}", is_error=True)
 
     def _handle_pitch_bend_init(self, key_id, position):
-        channel = self.channel_manager.allocate_channel(key_id)
-        bend_value = self._calculate_pitch_bend(position)
-        lsb = bend_value & 0x7F
-        msb = (bend_value >> 7) & 0x7F
-        self.message_sender.send_message([0xE0 | channel, lsb, msb])
+        try:
+            channel = self.channel_manager.allocate_channel(key_id)
+            bend_value = self._calculate_pitch_bend(position)
+            lsb = bend_value & 0x7F
+            msb = (bend_value >> 7) & 0x7F
+            self.message_sender.send_message([0xE0 | channel, lsb, msb])
+            log(TAG_MESSAGE, f"Initialized pitch bend: key={key_id}, channel={channel}, value={bend_value}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error initializing pitch bend: {str(e)}", is_error=True)
 
     def _handle_pitch_bend_update(self, key_id, position):
-        note_state = self.channel_manager.get_note_state(key_id)
-        if note_state:
-            bend_value = self._calculate_pitch_bend(position)
-            # Only send if pitch bend has changed
-            if bend_value != note_state.pitch_bend:
-                lsb = bend_value & 0x7F
-                msb = (bend_value >> 7) & 0x7F
-                self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
-                note_state.pitch_bend = bend_value
+        try:
+            note_state = self.channel_manager.get_note_state(key_id)
+            if note_state:
+                bend_value = self._calculate_pitch_bend(position)
+                # Only send if pitch bend has changed
+                if bend_value != note_state.pitch_bend:
+                    lsb = bend_value & 0x7F
+                    msb = (bend_value >> 7) & 0x7F
+                    self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
+                    note_state.pitch_bend = bend_value
+                    log(TAG_MESSAGE, f"Updated pitch bend: key={key_id}, channel={note_state.channel}, value={bend_value}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error updating pitch bend: {str(e)}", is_error=True)
 
     def _handle_note_on(self, midi_note, velocity, key_id):
-        channel = self.channel_manager.allocate_channel(key_id)
-        self.channel_manager.add_note(key_id, midi_note, channel, velocity)
-        self.message_sender.send_message([0x90 | channel, int(midi_note), velocity])
+        try:
+            channel = self.channel_manager.allocate_channel(key_id)
+            self.channel_manager.add_note(key_id, midi_note, channel, velocity)
+            self.message_sender.send_message([0x90 | channel, int(midi_note), velocity])
+            log(TAG_MESSAGE, f"Note on: key={key_id}, note={midi_note}, channel={channel}, velocity={velocity}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error handling note on: {str(e)}", is_error=True)
 
     def _handle_note_off(self, midi_note, velocity, key_id):
-        note_state = self.channel_manager.get_note_state(key_id)
-        if note_state:
-            self.message_sender.send_message([0x80 | note_state.channel, int(midi_note), velocity])
-            self.channel_manager.release_note(key_id)
+        try:
+            note_state = self.channel_manager.get_note_state(key_id)
+            if note_state:
+                self.message_sender.send_message([0x80 | note_state.channel, int(midi_note), velocity])
+                self.channel_manager.release_note(key_id)
+                log(TAG_MESSAGE, f"Note off: key={key_id}, note={midi_note}, channel={note_state.channel}, velocity={velocity}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error handling note off: {str(e)}", is_error=True)
 
     def _handle_control_change(self, cc_number, midi_value):
-        self.message_sender.send_message([0xB0 | ZONE_MANAGER, cc_number, midi_value])
+        try:
+            self.message_sender.send_message([0xB0 | ZONE_MANAGER, cc_number, midi_value])
+            log(TAG_MESSAGE, f"Control change: cc={cc_number}, value={midi_value}")
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error handling control change: {str(e)}", is_error=True)
 
     def _calculate_pitch_bend(self, position):
         """Calculate pitch bend value from position (-1 to 1)"""
-        normalized = (position + 1) / 2  # Convert -1 to 1 range to 0 to 1
-        return int(normalized * PITCH_BEND_MAX)
+        try:
+            normalized = (position + 1) / 2  # Convert -1 to 1 range to 0 to 1
+            return int(normalized * PITCH_BEND_MAX)
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error calculating pitch bend: {str(e)}", is_error=True)
+            return PITCH_BEND_MAX // 2  # Return center position on error
