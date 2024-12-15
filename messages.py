@@ -1,6 +1,7 @@
 """MIDI message routing and transport management."""
 
 import time
+import math
 import busio
 import adafruit_midi
 import usb_midi
@@ -13,7 +14,9 @@ from constants import (
     UART_BAUDRATE,
     UART_TIMEOUT,
     ZONE_MANAGER,
-    PITCH_BEND_MAX
+    PITCH_BEND_MAX,
+    PRESSURE_CURVE,
+    BEND_CURVE
 )
 from logging import log, TAG_MESSAGE
 
@@ -154,10 +157,83 @@ class MidiEventRouter:
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling event {event}: {str(e)}", is_error=True)
 
+    def _calculate_pressure(self, pressure):
+        """
+        pressure: 0.0 to 1.0 (hardware normalized value)
+        PRESSURE_CURVE effects:
+        0.0: linear mapping (hardware direct)
+        1.0: quick changes at extremes, very slow in middle
+        """
+        try:
+            if PRESSURE_CURVE == 0.0:
+                scaled = pressure
+            else:
+                # Shift to -0.5 to 0.5 range
+                center_shift = pressure - 0.5
+                
+                # Calculate curve power (lower = more extreme curve)
+                # At PRESSURE_CURVE = 1.0, power = 0.25 for extreme curve
+                # At PRESSURE_CURVE = 0.0, power = 1.0 for linear
+                curve_power = 1.0 - (PRESSURE_CURVE * 0.75)
+                
+                # Apply curve and shift back to 0-1
+                if center_shift < 0:
+                    # For negative shift, curve and invert
+                    curved = math.pow(abs(center_shift) * 2, curve_power) * 0.5
+                    scaled = 0.5 - curved
+                else:
+                    # For positive shift, curve and add to center
+                    curved = math.pow(center_shift * 2, curve_power) * 0.5
+                    scaled = 0.5 + curved
+            
+            return int(scaled * 127)
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error calculating pressure: {str(e)}", is_error=True)
+            return 0
+
+    def _calculate_pitch_bend(self, position):
+        """
+        position: -1.0 to 1.0 (hardware normalized position)
+        BEND_CURVE effects:
+        0.0: linear mapping (hardware direct)
+        1.0: quick changes at extremes, very slow in middle
+        """
+        try:
+            normalized = (position + 1) / 2  # Convert to 0-1 range
+            
+            if BEND_CURVE == 0.0:
+                scaled = normalized
+            else:
+                # Shift to -0.5 to 0.5 range
+                center_shift = normalized - 0.5
+                
+                # Calculate curve power (lower = more extreme curve)
+                # At BEND_CURVE = 1.0, power = 0.25 for extreme curve
+                # At BEND_CURVE = 0.0, power = 1.0 for linear
+                curve_power = 1.0 - (BEND_CURVE * 0.75)
+                
+                # Apply curve and shift back to 0-1
+                if center_shift < 0:
+                    # For negative shift, curve and invert
+                    curved = math.pow(abs(center_shift) * 2, curve_power) * 0.5
+                    scaled = 0.5 - curved
+                else:
+                    # For positive shift, curve and add to center
+                    curved = math.pow(center_shift * 2, curve_power) * 0.5
+                    scaled = 0.5 + curved
+            
+            # Ensure unsigned value between 0 and PITCH_BEND_MAX
+            bend_value = int(scaled * PITCH_BEND_MAX) & 0x3FFF
+            return bend_value
+            
+        except Exception as e:
+            log(TAG_MESSAGE, f"Error calculating pitch bend: {str(e)}", is_error=True)
+            return PITCH_BEND_MAX // 2  # Return center position on error
+
     def _handle_pressure_init(self, key_id, pressure):
         try:
             channel = self.channel_manager.allocate_channel(key_id)
-            pressure_value = int(pressure * 127)
+            pressure_value = self._calculate_pressure(pressure)
             self.message_sender.send_message([0xD0 | channel, pressure_value])
             log(TAG_MESSAGE, f"Initialized pressure: key={key_id}, channel={channel}, value={pressure_value}")
         except Exception as e:
@@ -167,7 +243,7 @@ class MidiEventRouter:
         try:
             note_state = self.channel_manager.get_note_state(key_id)
             if note_state:
-                pressure_value = int(pressure * 127)
+                pressure_value = self._calculate_pressure(pressure)
                 # Only send if pressure has changed
                 if pressure_value != note_state.pressure:
                     self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
@@ -227,12 +303,3 @@ class MidiEventRouter:
             log(TAG_MESSAGE, f"Control change: cc={cc_number}, value={midi_value}")
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling control change: {str(e)}", is_error=True)
-
-    def _calculate_pitch_bend(self, position):
-        """Calculate pitch bend value from position (-1 to 1)"""
-        try:
-            normalized = (position + 1) / 2  # Convert -1 to 1 range to 0 to 1
-            return int(normalized * PITCH_BEND_MAX)
-        except Exception as e:
-            log(TAG_MESSAGE, f"Error calculating pitch bend: {str(e)}", is_error=True)
-            return PITCH_BEND_MAX // 2  # Return center position on error

@@ -3,8 +3,7 @@
 import math
 from constants import (
     MAX_VK_RESISTANCE, MIN_VK_RESISTANCE,
-    REST_VOLTAGE_THRESHOLD, ADC_RESISTANCE_SCALE,
-    PRESSURE_FLOOR, PRESSURE_CEILING, ENVELOPE_CURVE
+    REST_VOLTAGE_THRESHOLD, ADC_RESISTANCE_SCALE
 )
 from logging import log, TAG_PRESSUR
 
@@ -13,7 +12,10 @@ class PressureSensorProcessor:
         try:
             log(TAG_PRESSUR, "Initializing pressure sensor processor")
             log(TAG_PRESSUR, f"Resistance range: {MIN_VK_RESISTANCE:.0f} to {MAX_VK_RESISTANCE:.0f} ohms")
-            log(TAG_PRESSUR, f"Pressure range: {PRESSURE_FLOOR:.2f} to {PRESSURE_CEILING:.2f}")
+            self.min_seen_resistance = float('inf')
+            self.max_seen_resistance = 0
+            self.samples_collected = 0
+            self.resistance_sum = 0
         except Exception as e:
             log(TAG_PRESSUR, f"Failed to initialize pressure processor: {str(e)}", is_error=True)
             raise
@@ -26,6 +28,21 @@ class PressureSensorProcessor:
                 return float('inf')
             
             resistance = ADC_RESISTANCE_SCALE * voltage / (3.3 - voltage)
+            
+            # Track resistance range statistics
+            if resistance < float('inf'):
+                self.min_seen_resistance = min(self.min_seen_resistance, resistance)
+                self.max_seen_resistance = max(self.max_seen_resistance, resistance)
+                self.resistance_sum += resistance
+                self.samples_collected += 1
+                
+                # Log statistics every 1000 samples
+                if self.samples_collected % 1000 == 0:
+                    avg_resistance = self.resistance_sum / self.samples_collected
+                    log(TAG_PRESSUR, f"Resistance stats after {self.samples_collected} samples:")
+                    log(TAG_PRESSUR, f"  Min: {self.min_seen_resistance:.0f} ohms")
+                    log(TAG_PRESSUR, f"  Max: {self.max_seen_resistance:.0f} ohms")
+                    log(TAG_PRESSUR, f"  Avg: {avg_resistance:.0f} ohms")
             
             # Log unusual resistance values
             if resistance < MIN_VK_RESISTANCE * 0.5:  # Much lower than expected
@@ -43,23 +60,28 @@ class PressureSensorProcessor:
             return float('inf')
         
     def normalize_resistance(self, resistance):
-        """Convert resistance to normalized pressure value (0.0-1.0) using logarithmic curve"""
+        """Convert resistance to normalized pressure value (0.0-1.0) using enhanced logarithmic scaling"""
         try:
             if resistance >= MAX_VK_RESISTANCE:
                 return 0
             if resistance <= MIN_VK_RESISTANCE:
                 return 1
                 
-            # Calculate logarithmic normalization
-            log_min = math.log(MIN_VK_RESISTANCE)
-            log_max = math.log(MAX_VK_RESISTANCE)
-            log_value = math.log(resistance)
+            # Calculate basic logarithmic normalization
+            log_normalized = math.log(resistance/MIN_VK_RESISTANCE) / math.log(MAX_VK_RESISTANCE/MIN_VK_RESISTANCE)
             
-            # Inverse the normalization since resistance decreases with pressure
-            normalized = 1.0 - ((log_value - log_min) / (log_max - log_min))
+            # Invert and enhance lower range sensitivity with power function
+            # Power = 0.5 gives square root curve:
+            # - More gradual change in high resistance (light pressure) range
+            # - Still reaches maximum values with enough pressure
+            normalized = math.pow(1.0 - log_normalized, 3)
             
-            # Apply envelope
-            result = self.apply_envelope(normalized)
+            # Log normalization pairs every 100th sample
+            if self.samples_collected % 100 == 0:
+                log(TAG_PRESSUR, f"Normalization: {resistance:.0f} ohms -> {normalized:.3f}")
+            
+            # Clamp to valid range
+            result = max(0.0, min(1.0, normalized))
             
             # Log significant pressure values
             if result > 0.9:  # Near maximum pressure
@@ -71,31 +93,6 @@ class PressureSensorProcessor:
             log(TAG_PRESSUR, f"Error normalizing resistance {resistance}: {str(e)}", is_error=True)
             return 0.0
 
-    def apply_envelope(self, raw_pressure):
-        """Apply envelope to expand limited pressure range"""
-        try:
-            # Clamp to floor/ceiling
-            if raw_pressure < PRESSURE_FLOOR:
-                return 0.0
-            if raw_pressure > PRESSURE_CEILING:
-                return 1.0
-                
-            # Normalize to new range
-            normalized = (raw_pressure - PRESSURE_FLOOR) / (PRESSURE_CEILING - PRESSURE_FLOOR)
-            
-            # Apply curve
-            curved = math.pow(normalized, ENVELOPE_CURVE)
-            
-            # Log significant envelope adjustments
-            if abs(curved - raw_pressure) > 0.3:  # Large envelope effect
-                log(TAG_PRESSUR, f"Large envelope adjustment: {raw_pressure:.3f} -> {curved:.3f}")
-            
-            return max(0.0, min(1.0, curved))
-            
-        except Exception as e:
-            log(TAG_PRESSUR, f"Error applying envelope to {raw_pressure}: {str(e)}", is_error=True)
-            return 0.0
-
     def calculate_position(self, left_norm, right_norm):
         """Calculate relative position (-1.0 to 1.0) from normalized L/R values"""
         try:
@@ -105,9 +102,9 @@ class PressureSensorProcessor:
                 
             position = (right_norm - left_norm) / total
             
-            # Log extreme positions
-            if abs(position) > 0.9:  # Near edges
-                log(TAG_PRESSUR, f"Extreme position detected: {position:.3f}")
+            # Log position calculations every 100th sample
+            if self.samples_collected % 100 == 0:
+                log(TAG_PRESSUR, f"Position calc - L:{left_norm:.3f} R:{right_norm:.3f} -> Pos:{position:.3f}")
                 
             return position
             
@@ -119,6 +116,10 @@ class PressureSensorProcessor:
         """Calculate total pressure (0.0-1.0) from normalized L/R values"""
         try:
             pressure = max(left_norm, right_norm)
+            
+            # Log pressure calculations every 100th sample
+            if self.samples_collected % 100 == 0:
+                log(TAG_PRESSUR, f"Pressure calc - L:{left_norm:.3f} R:{right_norm:.3f} -> P:{pressure:.3f}")
             
             # Log significant pressure imbalances
             if min(left_norm, right_norm) < max(left_norm, right_norm) * 0.5:
