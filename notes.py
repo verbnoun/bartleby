@@ -16,7 +16,7 @@ class NoteState:
     """Memory-efficient note state tracking for CircuitPython with active state tracking"""
     __slots__ = ['key_id', 'midi_note', 'channel', 'velocity', 'timestamp', 
                  'pressure', 'pitch_bend', 'timbre', 'active', 'activation_time',
-                 'pressure_history', 'pressure_timestamps']
+                 'pressure_history', 'pressure_timestamps', 'initial_position']
     
     def __init__(self, key_id, midi_note, channel, velocity):
         self.key_id = key_id
@@ -31,6 +31,7 @@ class NoteState:
         self.active = True
         self.pressure_history = []
         self.pressure_timestamps = []
+        self.initial_position = None  # Store initial position for pitch bend centering
         log(TAG_NOTES, f"Note {midi_note} activated on channel {channel} with velocity {velocity}")
 
     def update_pressure(self, pressure):

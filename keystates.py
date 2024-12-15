@@ -14,6 +14,7 @@ class KeyState:
         self.left_value = 0
         self.right_value = 0
         self.position = 0  # -1.0 to 1.0 for MPE pitch bend
+        self.initial_position = None  # Initial press position for pitch bend centering
         self.pressure = 0  # 0.0 to 1.0 for MPE pressure
         self.strike_velocity = 0  # 0.0 to 1.0 for MIDI note velocity
         self.last_update = 0
@@ -42,6 +43,7 @@ class KeyStateTracker:
                 if max_pressure < DEACTIVATION_THRESHOLD:
                     log(TAG_KEYSTAT, f"Key deactivated - pressure: {max_pressure:.3f}")
                     key_state.active = False
+                    key_state.initial_position = None  # Reset initial position on deactivation
                     return False
                 return True
             else:

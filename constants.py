@@ -85,7 +85,7 @@ ADC_RESISTANCE_SCALE = 100000
 
 # MIDI Curve Constants
 PRESSURE_CURVE = 0.5  # 0.0 = linear, 1.0 = extreme middle expansion
-BEND_CURVE = 0.0      # 0.0 = linear, 1.0 = extreme middle stability
+BEND_CURVE = 0      # 0.0 = linear, 1.0 = extreme middle stability
 
 # MIDI Velocity Settings
 VELOCITY_DELAY = 0
