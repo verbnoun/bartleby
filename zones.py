@@ -112,6 +112,10 @@ class ZoneManager:
                 # Clear any pending allocation
                 self.pending_channels.pop(key_id, None)
                 
+                # Remove inactive note from active_notes to prevent ghost notes
+                del self.active_notes[key_id]
+                log(TAG_ZONES, f"Removed inactive note {key_id} from active_notes")
+                
                 # Log remaining channel usage
                 active_channels = sum(1 for ch in self.channel_notes if self.channel_notes[ch])
                 log(TAG_ZONES, f"Channels in use after release: {active_channels}")

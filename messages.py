@@ -118,6 +118,12 @@ class MidiEventRouter:
             log(TAG_MESSAGE, "Initializing MIDI event router")
             self.message_sender = message_sender
             self.channel_manager = channel_manager
+            # Initialize message statistics
+            self.message_stats = {
+                'pitch_bend': {'allowed': 0, 'filtered': 0},
+                'pressure': {'allowed': 0, 'filtered': 0},
+                'timbre': {'allowed': 0, 'filtered': 0}
+            }
         except Exception as e:
             log(TAG_MESSAGE, f"Failed to initialize event router: {str(e)}", is_error=True)
             raise
@@ -238,6 +244,9 @@ class MidiEventRouter:
             channel = self.channel_manager.allocate_channel(key_id)
             pressure_value = self._calculate_pressure(pressure)
             self.message_sender.send_message([0xD0 | channel, pressure_value])
+            log(TAG_MESSAGE, f"Created Channel Pressure: ch={channel} pressure={pressure_value}")
+            log(TAG_MESSAGE, f"MPE Pressure: zone=lower ch={channel} pressure={pressure_value}")
+            self.message_stats['pressure']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error initializing pressure: {str(e)}", is_error=True)
 
@@ -249,7 +258,10 @@ class MidiEventRouter:
                 # Only send if pressure has changed
                 if pressure_value != note_state.pressure:
                     self.message_sender.send_message([0xD0 | note_state.channel, pressure_value])
+                    log(TAG_MESSAGE, f"Created Channel Pressure: ch={note_state.channel} pressure={pressure_value}")
+                    log(TAG_MESSAGE, f"MPE Pressure: zone=lower ch={note_state.channel} pressure={pressure_value}")
                     note_state.pressure = pressure_value
+                    self.message_stats['pressure']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error updating pressure: {str(e)}", is_error=True)
 
@@ -263,6 +275,9 @@ class MidiEventRouter:
             lsb = bend_value & 0x7F
             msb = (bend_value >> 7) & 0x7F
             self.message_sender.send_message([0xE0 | channel, lsb, msb])
+            log(TAG_MESSAGE, f"Created Pitch Bend: ch={channel} value={bend_value}")
+            log(TAG_MESSAGE, f"MPE Pitch Bend: zone=lower ch={channel} value={bend_value}")
+            self.message_stats['pitch_bend']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error initializing pitch bend: {str(e)}", is_error=True)
 
@@ -275,7 +290,10 @@ class MidiEventRouter:
                     lsb = bend_value & 0x7F
                     msb = (bend_value >> 7) & 0x7F
                     self.message_sender.send_message([0xE0 | note_state.channel, lsb, msb])
+                    log(TAG_MESSAGE, f"Created Pitch Bend: ch={note_state.channel} value={bend_value}")
+                    log(TAG_MESSAGE, f"MPE Pitch Bend: zone=lower ch={note_state.channel} value={bend_value}")
                     note_state.pitch_bend = bend_value
+                    self.message_stats['pitch_bend']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error updating pitch bend: {str(e)}", is_error=True)
 
@@ -284,6 +302,8 @@ class MidiEventRouter:
             channel = self.channel_manager.allocate_channel(key_id)
             self.channel_manager.add_note(key_id, midi_note, channel, velocity)
             self.message_sender.send_message([0x90 | channel, int(midi_note), velocity])
+            log(TAG_MESSAGE, f"Created Note note_on: ch={channel} note={midi_note} vel={velocity}")
+            log(TAG_MESSAGE, f"MPE Note On: zone=lower ch={channel} note={midi_note} vel={velocity}")
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling note on: {str(e)}", is_error=True)
 
@@ -292,6 +312,8 @@ class MidiEventRouter:
             note_state = self.channel_manager.get_note_state(key_id)
             if note_state:
                 self.message_sender.send_message([0x80 | note_state.channel, int(midi_note), velocity])
+                log(TAG_MESSAGE, f"Created Note Off: ch={note_state.channel} note={midi_note} vel={velocity}")
+                log(TAG_MESSAGE, f"MPE Note Off: zone=lower ch={note_state.channel} note={midi_note} vel={velocity}")
                 self.channel_manager.release_note(key_id)
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling note off: {str(e)}", is_error=True)
@@ -299,5 +321,7 @@ class MidiEventRouter:
     def _handle_control_change(self, cc_number, midi_value):
         try:
             self.message_sender.send_message([0xB0 | ZONE_MANAGER, cc_number, midi_value])
+            log(TAG_MESSAGE, f"Created Control Change: ch={ZONE_MANAGER} cc={cc_number} value={midi_value}")
+            log(TAG_MESSAGE, f"MPE Control Change: zone=lower ch={ZONE_MANAGER} cc={cc_number} value={midi_value}")
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling control change: {str(e)}", is_error=True)

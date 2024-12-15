@@ -75,21 +75,19 @@ NUM_CHANNELS = 50
 
 # Sensor Constants
 MAX_VK_RESISTANCE = 25000
-MIN_VK_RESISTANCE = 2200
-INITIAL_ACTIVATION_THRESHOLD = 0.00001
+MIN_VK_RESISTANCE = 1100
+INITIAL_ACTIVATION_THRESHOLD = 0  # Removed threshold - note-on will fire with any detectable pressure
 DEACTIVATION_THRESHOLD = 0.000015
-NOTE_MIDI_THRESHOLD = 0.00001
 REST_VOLTAGE_THRESHOLD = 3.3
 ADC_RESISTANCE_SCALE = 100000
 
-
 # MIDI Curve Constants
-PRESSURE_CURVE = 0.5  # 0.0 = linear, 1.0 = extreme middle expansion
+PRESSURE_CURVE = 0.3  # 0.0 = linear, 1.0 = extreme middle expansion
 BEND_CURVE = 0      # 0.0 = linear, 1.0 = extreme middle stability
 
 # MIDI Velocity Settings
 VELOCITY_DELAY = 0
-PRESSURE_HISTORY_SIZE = 3
+PRESSURE_HISTORY_SIZE = 8  # Increased from 3 to 8 for better release velocity calculation
 RELEASE_VELOCITY_THRESHOLD = 0.01
 RELEASE_VELOCITY_SCALE = 0.5
 

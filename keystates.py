@@ -48,7 +48,7 @@ class KeyStateTracker:
                 return True
             else:
                 # Key is inactive - use initial activation threshold
-                if max_pressure > INITIAL_ACTIVATION_THRESHOLD:
+                if max_pressure >= INITIAL_ACTIVATION_THRESHOLD:
                     key_state.active = True
                     key_state.strike_velocity = max_pressure  # Capture initial velocity
                     log(TAG_KEYSTAT, f"Key activated - initial velocity: {key_state.strike_velocity:.3f}")

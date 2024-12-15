@@ -7,10 +7,9 @@ from constants import (
     RELEASE_VELOCITY_THRESHOLD,
     PITCH_BEND_CENTER,
     PITCH_BEND_MAX,
-    TIMBRE_CENTER,
-    NOTE_MIDI_THRESHOLD
+    TIMBRE_CENTER
 )
-from logging import log, TAG_NOTES
+from logging import log, TAG_NOTES, TAG_MESSAGE
 
 class NoteState:
     """Memory-efficient note state tracking for CircuitPython with active state tracking"""
@@ -59,36 +58,50 @@ class NoteState:
             log(TAG_NOTES, f"Error updating pressure: {str(e)}", is_error=True)
 
     def calculate_release_velocity(self):
-        """Calculate release velocity based on pressure decay rate"""
+        """Calculate release velocity based on pressure decay rate with weighted average"""
         try:
+            log(TAG_MESSAGE, f"Note {self.midi_note} calculating release velocity...")
+            log(TAG_MESSAGE, f"Pressure history: {self.pressure_history}")
+            log(TAG_MESSAGE, f"Pressure timestamps: {[t - self.pressure_timestamps[0] for t in self.pressure_timestamps]}")
+            
             if len(self.pressure_history) < 2:
+                log(TAG_MESSAGE, f"Note {self.midi_note} insufficient pressure history")
                 return 0
                 
-            # Calculate average rate of change over the last few readings
-            total_change = 0
-            total_time = 0
+            # Calculate weighted average of rates, earlier changes count more
+            total_weighted_rate = 0
+            total_weight = 0
             
+            changes = []
             for i in range(1, len(self.pressure_history)):
-                pressure_change = self.pressure_history[i] - self.pressure_history[i-1]
+                pressure_change = abs(self.pressure_history[i] - self.pressure_history[i-1])
                 time_change = self.pressure_timestamps[i] - self.pressure_timestamps[i-1]
                 if time_change > 0:
-                    total_change += pressure_change
-                    total_time += time_change
+                    rate = pressure_change / time_change
+                    # Weight earlier changes more (weight decreases as i increases)
+                    weight = 1.0 / (i * 0.5)  # 1.0, 0.5, 0.33, 0.25...
+                    total_weighted_rate += rate * weight
+                    total_weight += weight
+                    changes.append((pressure_change, time_change, rate, weight))
             
-            if total_time <= 0:
+            log(TAG_MESSAGE, f"Note {self.midi_note} pressure changes: {changes}")
+            
+            if total_weight == 0:
+                log(TAG_MESSAGE, f"Note {self.midi_note} no valid changes")
                 return 0
                 
-            avg_decay_rate = abs(total_change / total_time)
+            avg_decay_rate = total_weighted_rate / total_weight
+            log(TAG_MESSAGE, f"Note {self.midi_note} weighted avg decay rate: {avg_decay_rate:.3f}")
             
             # Convert decay rate to MIDI velocity (0-127)
             if avg_decay_rate < RELEASE_VELOCITY_THRESHOLD:
+                log(TAG_MESSAGE, f"Note {self.midi_note} decay rate below threshold")
                 return 0
                 
-            # Scale the decay rate and apply curve for more natural response
-            scaled_rate = avg_decay_rate * 2.0  # Double the rate to make it more sensitive
-            velocity = min(127, int(scaled_rate * 127))
+            # Scale to MIDI velocity with smaller scale factor
+            velocity = min(127, int(avg_decay_rate * 32))  # Use 32 instead of 64 for gentler scaling
             
-            log(TAG_NOTES, f"Note {self.midi_note} release velocity: {velocity} (decay rate: {avg_decay_rate:.3f})")
+            log(TAG_MESSAGE, f"Note {self.midi_note} release velocity: {velocity} (decay rate: {avg_decay_rate:.3f})")
             return velocity
             
         except Exception as e:
@@ -117,10 +130,9 @@ class MPENoteProcessor:
             
             for key_id, position, pressure, strike_velocity in changed_keys:
                 note_state = self.channel_manager.get_note_state(key_id)
+                midi_note = self.base_root_note + self.octave_shift * 12 + key_id
                 
-                if pressure > NOTE_MIDI_THRESHOLD:  # Key is active
-                    midi_note = self.base_root_note + self.octave_shift * 12 + key_id
-                    
+                if pressure > 0:  # Key is active - any pressure triggers note
                     if not note_state:  # New note
                         if key_id not in self.pending_velocities:
                             # Store initial pressure and time for delayed velocity calculation
@@ -133,7 +145,7 @@ class MPENoteProcessor:
                             log(TAG_NOTES, f"Note {midi_note} pending velocity calculation")
                         elif current_time - self.pending_velocities[key_id]['time'] >= VELOCITY_DELAY:
                             # Enough time has passed, use the current pressure as velocity
-                            velocity = int(pressure * 127)
+                            velocity = max(1, int(pressure * 127))  # Scale normalized pressure to MIDI range
                             # Proper MPE order: Pressure → Pitch Bend → Note On
                             midi_events.extend([
                                 ('pressure_init', key_id, pressure),  # Z-axis
