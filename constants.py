@@ -13,11 +13,11 @@ UART_RX = board.GP17
 POT_SCAN_INTERVAL = 0.02
 ENCODER_SCAN_INTERVAL = 0.001
 MAIN_LOOP_INTERVAL = 0.001
-MESSAGE_TIMEOUT = 0.05
+MESSAGE_TIMEOUT = 0.5  # Increased from 0.05s to 0.5s for more reliable message assembly
 
 # MIDI Settings
 UART_BAUDRATE = 31250
-UART_TIMEOUT = 0.001
+UART_TIMEOUT = 0.005  # Increased from 0.001s to 0.005s for more complete reads
 
 # MIDI Control Constants
 CC_TIMBRE = 74
@@ -27,7 +27,7 @@ TIMBRE_CENTER = 64
 DETECT_PIN = board.GP22
 COMMUNICATION_TIMEOUT = 5.0  # Time without any message before disconnect
 STARTUP_DELAY = 1.0  # Give devices time to initialize
-BUFFER_CLEAR_TIMEOUT = 0.1  # Time to wait for buffer clearing
+BUFFER_CLEAR_TIMEOUT = 0.2  # Increased from 0.1s to 0.2s for complete buffer clearing
 VALID_CARTRIDGES = ["Candide", "Don Quixote"]  # List of known cartridge names
 
 # ADC Constants

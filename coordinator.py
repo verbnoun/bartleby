@@ -20,12 +20,6 @@ class HardwareCoordinator:
     def __init__(self):
         log(TAG_HW, "Initializing hardware coordinator")
         try:
-            # Set up detect pin as output HIGH to signal presence
-            self.detect_pin = digitalio.DigitalInOut(DETECT_PIN)
-            self.detect_pin.direction = digitalio.Direction.OUTPUT
-            self.detect_pin.value = True
-            log(TAG_HW, "Detect pin configured")
-            
             # Initialize components
             self.components = self._initialize_components()
             time.sleep(SETUP_DELAY)

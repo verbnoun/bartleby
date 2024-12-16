@@ -99,27 +99,48 @@ class ConnectionManager:
             # Convert to MIDI system format
             # Need to strip control names for MIDI system
             midi_assignments = []
+            
+            # Process CC assignments with improved error handling
             for assignment in parts[3:]:
-                if not assignment:
+                if not assignment or '=' not in assignment or ':' not in assignment:
                     continue
+                    
                 try:
-                    pot_part, rest = assignment.split('=')
-                    cc_part, control_name = rest.split(':')
-                    pot_num = int(pot_part)
-                    cc_num = int(cc_part)
+                    # First split on equals to get pot number
+                    pot_part, rest = assignment.split('=', 1)
+                    
+                    # Then split rest on first colon only to get CC number and name
+                    parts_after_equals = rest.split(':', 1)
+                    if len(parts_after_equals) != 2:
+                        log(TAG_CONNECT, f"Invalid format in CC assignment: {assignment}", is_error=True)
+                        continue
+                        
+                    cc_part, control_name = parts_after_equals
+                    
+                    # Validate numbers before parsing
+                    if not (pot_part.strip().isdigit() and cc_part.strip().isdigit()):
+                        log(TAG_CONNECT, f"Invalid number format in CC assignment: {assignment}", is_error=True)
+                        continue
+                        
+                    pot_num = int(pot_part.strip())
+                    cc_num = int(cc_part.strip())
                     
                     # Store full mapping locally
                     self.pot_mapping[pot_num] = {
                         'cc': cc_num,
-                        'control_name': control_name
+                        'control_name': control_name.strip()
                     }
                     
                     # Add stripped version for MIDI system
-                    midi_assignments.append(f"{pot_part}={cc_part}")
+                    midi_assignments.append(f"{pot_num}={cc_num}")
                     
                 except (ValueError, IndexError) as e:
                     log(TAG_CONNECT, f"Error parsing CC assignment '{assignment}': {str(e)}", is_error=True)
                     continue
+            
+            if not midi_assignments:
+                log(TAG_CONNECT, "No valid CC assignments found")
+                return False
             
             # Convert to MIDI system format and send
             midi_format = "cc:" + ",".join(midi_assignments)

@@ -3,10 +3,11 @@
 import time
 import sys
 import random
+import digitalio
 from constants import (
     MAIN_LOOP_INTERVAL, UART_TX, UART_RX,
     UART_BAUDRATE, UART_TIMEOUT, CC_TIMBRE, TIMBRE_CENTER,
-    STARTUP_DELAY
+    STARTUP_DELAY, DETECT_PIN
 )
 from logging import (
     log, TAG_BARTLEBY, TAG_HW, TAG_MIDI, TAG_TRANS,
@@ -92,6 +93,13 @@ class Bartleby:
             # Add startup delay to ensure both sides are ready
             time.sleep(STARTUP_DELAY)
             _cycle_log("\nBartleby (v1.0) is awake... (◕‿◕✿)\n")
+            
+            # Now that everything is initialized and ready, set up detect pin
+            self.detect_pin = digitalio.DigitalInOut(DETECT_PIN)
+            self.detect_pin.direction = digitalio.Direction.OUTPUT
+            self.detect_pin.value = True
+            log(TAG_BARTLEBY, "Detect pin enabled - ready for configuration")
+            
         except Exception as e:
             log(TAG_BARTLEBY, f"Initial state setup failed: {str(e)}", is_error=True)
             raise
@@ -149,10 +157,10 @@ class Bartleby:
     def cleanup(self):
         log(TAG_BARTLEBY, "Starting cleanup sequence...")
         try:
-            if hasattr(self.hardware, 'detect_pin'):
-                log(TAG_HW, "Cleaning up hardware...")
-                self.hardware.detect_pin.value = False
-                self.hardware.detect_pin.deinit()
+            if hasattr(self, 'detect_pin'):
+                log(TAG_HW, "Cleaning up detect pin...")
+                self.detect_pin.value = False
+                self.detect_pin.deinit()
             if self.connection_manager:
                 self.connection_manager.cleanup()
             if self.midi:
