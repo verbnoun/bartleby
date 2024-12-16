@@ -82,7 +82,7 @@ TAG_COLORS = {
 LOG_ENABLE = {
     TAG_BARTLEBY: True,
     TAG_CONFIG: False,
-    TAG_CONNECT: False,
+    TAG_CONNECT: True,
     TAG_CONTROL: False,
     TAG_COORD: False,
     TAG_ENCODER: False,
@@ -90,7 +90,7 @@ LOG_ENABLE = {
     TAG_HW: False,
     TAG_KEYBD: False,
     TAG_KEYSTAT: False,
-    TAG_MESSAGE: False,
+    TAG_MESSAGE: True,
     TAG_MIDI: False,
     TAG_MUX: False,
     TAG_NOTES: False,

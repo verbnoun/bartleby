@@ -28,7 +28,7 @@ DETECT_PIN = board.GP22
 COMMUNICATION_TIMEOUT = 5.0  # Time without any message before disconnect
 STARTUP_DELAY = 1.0  # Give devices time to initialize
 BUFFER_CLEAR_TIMEOUT = 0.1  # Time to wait for buffer clearing
-MSG_CONFIG = "cc|"
+VALID_CARTRIDGES = ["Candide", "Don Quixote"]  # List of known cartridge names
 
 # ADC Constants
 ADC_MAX = 65535
