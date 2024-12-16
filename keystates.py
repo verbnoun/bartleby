@@ -41,7 +41,7 @@ class KeyStateTracker:
             if key_state.active:
                 # Key is already active - use deactivation threshold
                 if max_pressure < DEACTIVATION_THRESHOLD:
-                    log(TAG_KEYSTAT, f"Key deactivated - pressure: {max_pressure:.3f}")
+                    # log(TAG_KEYSTAT, f"Key deactivated - pressure: {max_pressure:.3f}")
                     key_state.active = False
                     key_state.initial_position = None  # Reset initial position on deactivation
                     return False
@@ -51,7 +51,7 @@ class KeyStateTracker:
                 if max_pressure >= INITIAL_ACTIVATION_THRESHOLD:
                     key_state.active = True
                     key_state.strike_velocity = max_pressure  # Capture initial velocity
-                    log(TAG_KEYSTAT, f"Key activated - initial velocity: {key_state.strike_velocity:.3f}")
+                    # log(TAG_KEYSTAT, f"Key activated - initial velocity: {key_state.strike_velocity:.3f}")
                     return True
                 return False
         except Exception as e:
@@ -77,11 +77,11 @@ class KeyStateTracker:
             if is_active:
                 if key_index not in self.active_keys:
                     self.active_keys.append(key_index)
-                    log(TAG_KEYSTAT, f"Key {key_index} added to active keys")
+                    # log(TAG_KEYSTAT, f"Key {key_index} added to active keys")
             else:
                 if key_index in self.active_keys:
                     self.active_keys.remove(key_index)
-                    log(TAG_KEYSTAT, f"Key {key_index} removed from active keys")
+                    # log(TAG_KEYSTAT, f"Key {key_index} removed from active keys")
 
             # Check if state changed
             if (left_normalized != key_state.left_value or 
