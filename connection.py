@@ -83,9 +83,9 @@ class ConnectionManager:
         try:
             self.pot_mapping.clear()
             
-            # Parse new format: "Candide|Prophet 5|cc|0=71:Low Pass Cutoff|1=22:Low Pass Resonance|..."
+            # Parse format: "Candide|Working|cc" or "Candide|Prophet 5|cc|0=71:Low Pass Cutoff|1=22:Low Pass Resonance|..."
             parts = message.split('|')
-            if len(parts) < 4:  # Now need at least 4 parts: cartridge, instrument, cc, and at least one mapping
+            if len(parts) < 3:  # Need at least cartridge, instrument, and cc marker
                 log(TAG_CONNECT, "Invalid config format")
                 return False
                 
@@ -95,6 +95,12 @@ class ConnectionManager:
             if parts[2] != "cc":
                 log(TAG_CONNECT, "Invalid config type")
                 return False
+                
+            # If no mappings provided, that's okay - just clear existing mappings
+            if len(parts) == 3:
+                log(TAG_CONNECT, f"Empty CC Configuration parsed for {self.cartridge_name} ({self.instrument_name})")
+                # Send empty config to MIDI system
+                return self.midi.handle_config_message("cc:")
                 
             # Convert to MIDI system format
             # Need to strip control names for MIDI system
@@ -137,10 +143,6 @@ class ConnectionManager:
                 except (ValueError, IndexError) as e:
                     log(TAG_CONNECT, f"Error parsing CC assignment '{assignment}': {str(e)}", is_error=True)
                     continue
-            
-            if not midi_assignments:
-                log(TAG_CONNECT, "No valid CC assignments found")
-                return False
             
             # Convert to MIDI system format and send
             midi_format = "cc:" + ",".join(midi_assignments)

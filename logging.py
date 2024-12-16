@@ -85,20 +85,20 @@ LOG_ENABLE = {
     TAG_CONNECT: True,
     TAG_CONTROL: True,
     TAG_COORD: True,
-    TAG_ENCODER: True,
-    TAG_HARDWAR: True,
-    TAG_HW: True,
+    TAG_ENCODER: False,
+    TAG_HARDWAR: False,
+    TAG_HW: False,
     TAG_KEYBD: True,
     TAG_KEYSTAT: True,
     TAG_MESSAGE: True,
     TAG_MIDI: True,
-    TAG_MUX: True,
+    TAG_MUX: False,
     TAG_NOTES: True,
-    TAG_POTS: True,
+    TAG_POTS: False,
     TAG_PRESSUR: True,
     TAG_STATE: True,
     TAG_TRANS: True,
-    TAG_ZONES: True
+    TAG_ZONES: False
 }
 
 # Special debug flags
