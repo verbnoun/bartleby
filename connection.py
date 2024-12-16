@@ -30,6 +30,7 @@ class ConnectionManager:
             
             # Store cartridge and pot mapping info
             self.cartridge_name = None
+            self.instrument_name = None
             self.pot_mapping = {}  # Format: {pot_number: {'cc': cc_number, 'control_name': name}}
             
             log(TAG_CONNECT, "Connection manager initialized - listening for Candide")
@@ -82,22 +83,23 @@ class ConnectionManager:
         try:
             self.pot_mapping.clear()
             
-            # Parse new format: "Candide|cc|0=71:Low Pass Cutoff|1=22:Low Pass Resonance|..."
+            # Parse new format: "Candide|Prophet 5|cc|0=71:Low Pass Cutoff|1=22:Low Pass Resonance|..."
             parts = message.split('|')
-            if len(parts) < 3:
+            if len(parts) < 4:  # Now need at least 4 parts: cartridge, instrument, cc, and at least one mapping
                 log(TAG_CONNECT, "Invalid config format")
                 return False
                 
-            # Extract cartridge name and verify cc marker
+            # Extract cartridge name, instrument name, and verify cc marker
             self.cartridge_name = parts[0]
-            if parts[1] != "cc":
+            self.instrument_name = parts[1]
+            if parts[2] != "cc":
                 log(TAG_CONNECT, "Invalid config type")
                 return False
                 
             # Convert to MIDI system format
             # Need to strip control names for MIDI system
             midi_assignments = []
-            for assignment in parts[2:]:
+            for assignment in parts[3:]:
                 if not assignment:
                     continue
                 try:
@@ -122,7 +124,7 @@ class ConnectionManager:
             # Convert to MIDI system format and send
             midi_format = "cc:" + ",".join(midi_assignments)
             if self.midi.handle_config_message(midi_format):
-                log(TAG_CONNECT, f"CC Configuration parsed for {self.cartridge_name}: {len(self.pot_mapping)} mappings")
+                log(TAG_CONNECT, f"CC Configuration parsed for {self.cartridge_name} ({self.instrument_name}): {len(self.pot_mapping)} mappings")
                 # Immediately send current pot values
                 self._send_pot_values()
                 return True
@@ -158,6 +160,7 @@ class ConnectionManager:
             self.state = self.STANDALONE
             self.last_message_time = time.monotonic()
             self.cartridge_name = None
+            self.instrument_name = None
             self.pot_mapping.clear()
             self.transport.flush_buffers()
             log(TAG_CONNECT, "Reset to initial state")
@@ -181,6 +184,7 @@ class ConnectionManager:
         """Get current cartridge information for UI"""
         return {
             'name': self.cartridge_name,
+            'instrument': self.instrument_name,
             'pots': self.pot_mapping
         }
     
