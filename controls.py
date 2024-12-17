@@ -70,7 +70,10 @@ class MidiControlProcessor:
         midi_events = []
         for pot_index, old_value, new_value in changed_pots:
             controller_number = self.controller_config.get_controller_for_pot(pot_index)
-            midi_value = int(new_value * 127)
+            # Ensure new_value is in 0-1 range before scaling to MIDI range
+            new_value = max(0.0, min(1.0, new_value))
+            # Scale to MIDI range and clamp to ensure valid CC value
+            midi_value = min(127, max(0, int(new_value * 127)))
             midi_events.append(('control_change', controller_number, midi_value))
             log(TAG_CONTROL, f"Controller {pot_index} changed: CC{controller_number}={midi_value}")
         return midi_events

@@ -4,7 +4,7 @@ import board
 import time
 from constants import (
     DETECT_PIN, COMMUNICATION_TIMEOUT, STARTUP_DELAY,
-    BUFFER_CLEAR_TIMEOUT, VALID_CARTRIDGES
+    BUFFER_CLEAR_TIMEOUT, VALID_CARTRIDGES, ZONE_MANAGER
 )
 from logging import log, TAG_CONNECT
 
@@ -13,9 +13,19 @@ class ConnectionManager:
     Manages connection state and handshake protocol for Bartleby (Base Station).
     Receives text messages, sends MIDI responses.
     """
-    # States
+    # Connection States
     STANDALONE = 0      # No active client
-    CONNECTED = 1       # Fully connected and operational
+    CONNECTING = 1      # Initial handshake
+    ATTACHED = 2        # Fully connected and operational
+    
+    # Config States
+    DEFAULT = 0         # Using default CC assignments
+    SETTING_CONFIG = 1  # Processing new config
+    CONFIGURED = 2      # Using custom config
+    
+    # Config acknowledgment
+    CONFIG_CC = 127     # CC number for config acknowledgment
+    CONFIG_EMPTY = 0    # Value for empty config
     
     def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager):
         try:
@@ -27,6 +37,9 @@ class ConnectionManager:
             # Connection state
             self.state = self.STANDALONE
             self.last_message_time = time.monotonic()
+            
+            # Config state
+            self.config_state = self.DEFAULT
             
             # Store cartridge and pot mapping info
             self.cartridge_name = None
@@ -56,18 +69,39 @@ class ConnectionManager:
         self.last_message_time = time.monotonic()
         
         try:
+            # Handle ⚡ message - transition to ATTACHED if in CONNECTING and CONFIGURED
+            if message.startswith("⚡"):
+                if self.state == self.CONNECTING and self.config_state == self.CONFIGURED:
+                    self.state = self.ATTACHED
+                    log(TAG_CONNECT, "Received confirmation ⚡ - Connection state -> ATTACHED")
+                return
+            
             # Check if message starts with a valid cartridge name
             cartridge_name = message.split('|')[0] if '|' in message else ''
             if cartridge_name in VALID_CARTRIDGES:
                 if self.state == self.STANDALONE:
-                    log(TAG_CONNECT, "Config received - parsing CC mapping")
-                else:
-                    log(TAG_CONNECT, "Config update received - applying new CC mapping")
+                    log(TAG_CONNECT, "Valid cartridge detected - entering CONNECTING state")
+                    self.state = self.CONNECTING
+                    
+                # Begin config process
+                self.config_state = self.SETTING_CONFIG
+                log(TAG_CONNECT, "Config state -> SETTING_CONFIG")
                 
-                # Parse config and send pot values
+                # Parse config and send acknowledgment
                 if self._parse_cc_config(message):
-                    self.state = self.CONNECTED
-                    # Pot values are now sent immediately after successful parsing
+                    self.config_state = self.CONFIGURED
+                    log(TAG_CONNECT, "Config state -> CONFIGURED")
+                    log(TAG_CONNECT, "Waiting for confirmation ⚡")
+                else:
+                    # Failed config handling
+                    if self.config_state != self.CONFIGURED:
+                        # If not already configured, reset everything
+                        self.config_state = self.DEFAULT
+                        self.state = self.STANDALONE
+                        log(TAG_CONNECT, "Config failed - returning to STANDALONE")
+                    else:
+                        # If already configured, keep existing config
+                        log(TAG_CONNECT, "Config update failed - keeping existing configuration")
                 return
                 
             # Handle heartbeat
@@ -99,6 +133,9 @@ class ConnectionManager:
             # If no mappings provided, that's okay - just clear existing mappings
             if len(parts) == 3:
                 log(TAG_CONNECT, f"Empty CC Configuration parsed for {self.cartridge_name} ({self.instrument_name})")
+                # Send empty config acknowledgment
+                self.midi.update([], [(self.CONFIG_CC, 0, self.CONFIG_EMPTY)], {})
+                log(TAG_CONNECT, f"Sent empty config ack: CC {self.CONFIG_CC} = {self.CONFIG_EMPTY}")
                 # Send empty config to MIDI system
                 return self.midi.handle_config_message("cc:")
                 
@@ -148,7 +185,7 @@ class ConnectionManager:
             midi_format = "cc:" + ",".join(midi_assignments)
             if self.midi.handle_config_message(midi_format):
                 log(TAG_CONNECT, f"CC Configuration parsed for {self.cartridge_name} ({self.instrument_name}): {len(self.pot_mapping)} mappings")
-                # Immediately send current pot values
+                # For non-empty configs, just send current pot values as the reply
                 self._send_pot_values()
                 return True
             
@@ -181,6 +218,7 @@ class ConnectionManager:
         """Reset to initial state"""
         try:
             self.state = self.STANDALONE
+            self.config_state = self.DEFAULT
             self.last_message_time = time.monotonic()
             self.cartridge_name = None
             self.instrument_name = None
@@ -201,7 +239,7 @@ class ConnectionManager:
         
     def is_connected(self):
         """Check if fully connected"""
-        return self.state == self.CONNECTED
+        return self.state == self.ATTACHED
         
     def get_cartridge_info(self):
         """Get current cartridge information for UI"""
