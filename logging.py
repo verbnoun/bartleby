@@ -90,7 +90,7 @@ LOG_ENABLE = {
     TAG_HW: False,
     TAG_KEYBD: False,
     TAG_KEYSTAT: False,
-    TAG_MESSAGE: True,
+    TAG_MESSAGE: False,
     TAG_MIDI: False,
     TAG_MUX: False,
     TAG_NOTES: False,

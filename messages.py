@@ -47,6 +47,8 @@ class MidiTransportManager:
                 self.usb_initialized = False
                 
             self.midi_callback = midi_callback
+            # Track last message type per channel in stream
+            self.channels_in_stream = {}
             log(TAG_MESSAGE, "MIDI transport initialization complete")
         except Exception as e:
             log(TAG_MESSAGE, f"Failed to initialize MIDI transport: {str(e)}", is_error=True)
@@ -56,10 +58,18 @@ class MidiTransportManager:
         """Send MIDI message to both UART and USB MIDI outputs"""
         try:
             if isinstance(message, list):
+                # Track message type for channel
+                status_byte = message[0]
+                message_type = status_byte & 0xF0
+                channel = status_byte & 0x0F
+                self.channels_in_stream[channel] = message_type
+                
                 if self.uart_initialized:
                     self.uart.write(bytes(message))
                 if self.usb_initialized:
                     usb_midi.ports[1].write(bytes(message))
+                
+                log(TAG_MESSAGE, f"Message type 0x{message_type:02X} in stream for channel {channel}")
             else:
                 if self.uart_initialized:
                     self.uart_midi.send(message)
@@ -68,6 +78,10 @@ class MidiTransportManager:
                     
         except Exception as e:
             log(TAG_MESSAGE, f"Error sending MIDI message: {str(e)}", is_error=True)
+
+    def is_note_off_in_stream(self, channel):
+        """Check if Note Off is the last message in stream for channel"""
+        return self.channels_in_stream.get(channel) == 0x80
 
     def read(self, size=None):
         """Read from UART"""
@@ -91,6 +105,7 @@ class MidiTransportManager:
         """Clean shutdown of MIDI transports"""
         try:
             log(TAG_MESSAGE, "Starting MIDI transport cleanup")
+            self.channels_in_stream.clear()
             # Don't deinit UART here since we don't own it
             self.uart_initialized = False
             log(TAG_MESSAGE, "MIDI transport cleanup complete")
@@ -110,6 +125,10 @@ class MidiMessageSender:
     def send_message(self, message):
         """Send a MIDI message directly"""
         self.transport.send_message(message)
+
+    def is_note_off_in_stream(self, channel):
+        """Check if Note Off is in stream for channel"""
+        return self.transport.is_note_off_in_stream(channel)
 
 class MidiEventRouter:
     """Routes and processes MIDI events"""
@@ -242,11 +261,12 @@ class MidiEventRouter:
     def _handle_pressure_init(self, key_id, pressure):
         try:
             channel = self.channel_manager.allocate_channel(key_id)
-            pressure_value = self._calculate_pressure(pressure)
-            self.message_sender.send_message([0xD0 | channel, pressure_value])
-            log(TAG_MESSAGE, f"Created Channel Pressure: ch={channel} pressure={pressure_value}")
-            log(TAG_MESSAGE, f"MPE Pressure: zone=lower ch={channel} pressure={pressure_value}")
-            self.message_stats['pressure']['allowed'] += 1
+            if channel is not None:  # Only proceed if we got a valid channel
+                pressure_value = self._calculate_pressure(pressure)
+                self.message_sender.send_message([0xD0 | channel, pressure_value])
+                log(TAG_MESSAGE, f"Created Channel Pressure: ch={channel} pressure={pressure_value}")
+                log(TAG_MESSAGE, f"MPE Pressure: zone=lower ch={channel} pressure={pressure_value}")
+                self.message_stats['pressure']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error initializing pressure: {str(e)}", is_error=True)
 
@@ -268,16 +288,17 @@ class MidiEventRouter:
     def _handle_pitch_bend_init(self, key_id, position):
         try:
             channel = self.channel_manager.allocate_channel(key_id)
-            note_state = self.channel_manager.get_note_state(key_id)
-            if note_state:
-                note_state.initial_position = position  # Store initial position
-            bend_value = self._calculate_pitch_bend(position, None)  # Pass None to check initial position
-            lsb = bend_value & 0x7F
-            msb = (bend_value >> 7) & 0x7F
-            self.message_sender.send_message([0xE0 | channel, lsb, msb])
-            log(TAG_MESSAGE, f"Created Pitch Bend: ch={channel} value={bend_value}")
-            log(TAG_MESSAGE, f"MPE Pitch Bend: zone=lower ch={channel} value={bend_value}")
-            self.message_stats['pitch_bend']['allowed'] += 1
+            if channel is not None:  # Only proceed if we got a valid channel
+                note_state = self.channel_manager.get_note_state(key_id)
+                if note_state:
+                    note_state.initial_position = position  # Store initial position
+                bend_value = self._calculate_pitch_bend(position, None)  # Pass None to check initial position
+                lsb = bend_value & 0x7F
+                msb = (bend_value >> 7) & 0x7F
+                self.message_sender.send_message([0xE0 | channel, lsb, msb])
+                log(TAG_MESSAGE, f"Created Pitch Bend: ch={channel} value={bend_value}")
+                log(TAG_MESSAGE, f"MPE Pitch Bend: zone=lower ch={channel} value={bend_value}")
+                self.message_stats['pitch_bend']['allowed'] += 1
         except Exception as e:
             log(TAG_MESSAGE, f"Error initializing pitch bend: {str(e)}", is_error=True)
 
@@ -300,10 +321,11 @@ class MidiEventRouter:
     def _handle_note_on(self, midi_note, velocity, key_id):
         try:
             channel = self.channel_manager.allocate_channel(key_id)
-            self.channel_manager.add_note(key_id, midi_note, channel, velocity)
-            self.message_sender.send_message([0x90 | channel, int(midi_note), velocity])
-            log(TAG_MESSAGE, f"Created Note note_on: ch={channel} note={midi_note} vel={velocity}")
-            log(TAG_MESSAGE, f"MPE Note On: zone=lower ch={channel} note={midi_note} vel={velocity}")
+            if channel is not None:  # Only proceed if we got a valid channel
+                self.channel_manager.add_note(key_id, midi_note, channel, velocity)
+                self.message_sender.send_message([0x90 | channel, int(midi_note), velocity])
+                log(TAG_MESSAGE, f"Created Note note_on: ch={channel} note={midi_note} vel={velocity}")
+                log(TAG_MESSAGE, f"MPE Note On: zone=lower ch={channel} note={midi_note} vel={velocity}")
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling note on: {str(e)}", is_error=True)
 
@@ -311,10 +333,16 @@ class MidiEventRouter:
         try:
             note_state = self.channel_manager.get_note_state(key_id)
             if note_state:
-                self.message_sender.send_message([0x80 | note_state.channel, int(midi_note), velocity])
-                log(TAG_MESSAGE, f"Created Note Off: ch={note_state.channel} note={midi_note} vel={velocity}")
-                log(TAG_MESSAGE, f"MPE Note Off: zone=lower ch={note_state.channel} note={midi_note} vel={velocity}")
-                self.channel_manager.release_note(key_id)
+                channel = note_state.channel
+                # Send Note Off
+                self.message_sender.send_message([0x80 | channel, int(midi_note), velocity])
+                log(TAG_MESSAGE, f"Created Note Off: ch={channel} note={midi_note} vel={velocity}")
+                log(TAG_MESSAGE, f"MPE Note Off: zone=lower ch={channel} note={midi_note} vel={velocity}")
+                
+                # Only release channel once Note Off is in stream
+                if self.message_sender.is_note_off_in_stream(channel):
+                    self.channel_manager.release_note(key_id)
+                    log(TAG_MESSAGE, f"Channel {channel} released after Note Off confirmed in stream")
         except Exception as e:
             log(TAG_MESSAGE, f"Error handling note off: {str(e)}", is_error=True)
 

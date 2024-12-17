@@ -23,7 +23,7 @@ class ZoneManager:
             raise
 
     def allocate_channel(self, key_id):
-        """Get next available channel using robust allocation strategy"""
+        """Get next available channel for MPE"""
         try:
             # Check pending allocation first
             if key_id in self.pending_channels:
@@ -37,40 +37,29 @@ class ZoneManager:
                 log(TAG_ZONES, f"Reusing active channel {channel} for key {key_id}")
                 return channel
 
-            # Find completely free channel first
+            # Find completely free channel
             for channel in self.available_channels:
                 if channel not in self.channel_notes or not self.channel_notes[channel]:
                     log(TAG_ZONES, f"Allocated free channel {channel} for key {key_id}")
                     self.pending_channels[key_id] = channel
                     return channel
 
-            # If no free channels, find channel with fewest active notes
-            min_notes = float('inf')
-            best_channel = None
-            
-            for channel in self.available_channels:
-                note_count = len(self.channel_notes.get(channel, set()))
-                if note_count < min_notes:
-                    min_notes = note_count
-                    best_channel = channel
-
-            if best_channel is not None:
-                log(TAG_ZONES, f"Allocated least used channel {best_channel} (notes: {min_notes}) for key {key_id}")
-                self.pending_channels[key_id] = best_channel
-                return best_channel
-
-            # Fallback to first channel if all else fails
-            log(TAG_ZONES, f"No optimal channels available, using first MPE channel for key {key_id}", is_error=True)
-            self.pending_channels[key_id] = ZONE_START
-            return ZONE_START
+            # No free channels available - ignore new key press
+            log(TAG_ZONES, f"No free channels available for key {key_id}")
+            return None
             
         except Exception as e:
             log(TAG_ZONES, f"Error allocating channel for key {key_id}: {str(e)}", is_error=True)
-            return ZONE_START
+            return None
 
     def add_note(self, key_id, midi_note, channel, velocity):
         """Add new note and track its channel allocation"""
         try:
+            # Don't proceed if no valid channel
+            if channel is None:
+                log(TAG_ZONES, f"Cannot add note - no channel allocated for key {key_id}")
+                return None
+                
             from notes import NoteState  # Import here to avoid circular dependency
             note_state = NoteState(key_id, midi_note, channel, velocity)
             self.active_notes[key_id] = note_state
