@@ -223,7 +223,15 @@ class ConnectionManager:
             self.cartridge_name = None
             self.instrument_name = None
             self.pot_mapping.clear()
+            
+            # Clear both UART and text protocol buffers
             self.transport.flush_buffers()
+            if hasattr(self.uart, 'clear_buffer'):
+                self.uart.clear_buffer()
+            
+            # Add a small delay to ensure we're ready for new messages
+            time.sleep(0.1)  # 100ms delay
+            
             log(TAG_CONNECT, "Reset to initial state")
         except Exception as e:
             log(TAG_CONNECT, f"Error during state reset: {str(e)}", is_error=True)

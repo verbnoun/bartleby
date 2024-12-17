@@ -53,20 +53,14 @@ class TransportManager:
             log(TAG_TRANS, f"Error during buffer flush: {str(e)}", is_error=True)
         
     def cleanup(self):
-        """Clean shutdown of transport"""
+        """Clean shutdown of transport - only flush buffers, don't deinit UART"""
         if self.uart_initialized:
             log(TAG_TRANS, "Starting transport cleanup")
             try:
                 self.flush_buffers()
-                if self.uart:
-                    self.uart.deinit()
-                    log(TAG_TRANS, "UART deinitialized successfully")
+                log(TAG_TRANS, "Transport cleanup complete")
             except Exception as e:
                 log(TAG_TRANS, f"Error during cleanup: {str(e)}", is_error=True)
-            finally:
-                self.uart = None
-                self.uart_initialized = False
-                log(TAG_TRANS, "Transport cleanup complete")
 
 class TextUart:
     """Handles text-based UART communication for receiving config only"""
