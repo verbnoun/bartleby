@@ -68,14 +68,15 @@ class Bartleby:
             # Initialize displays independently
             self.displays = DisplayManager()
             if self.displays.is_ready():
-                self.displays.show_text_all("Bartleby")
+                self.displays.show_text_all("Bartleby")  # Show initial greeting
             
-            # Initialize connection manager with hardware's detect pin
+            # Initialize connection manager with hardware's detect pin and display
             self.connection_manager = ConnectionManager(
                 self.text_uart,
                 self.hardware,
                 self.midi,
-                self.transport
+                self.transport,
+                self.displays
             )
             log(TAG_BARTLEBY, "Connection manager initialized")
             
@@ -96,19 +97,11 @@ class Bartleby:
             initial_pots = self.hardware.components['pots'].read_all_pots()
             log(TAG_BARTLEBY, f"Initial pot values read: {initial_pots}")
             
-            # Add startup delay to ensure both sides are ready and show greeting
+            # Add startup delay to ensure both sides are ready
             time.sleep(STARTUP_DELAY)
             
             # Show wake message
             _cycle_log("\nBartleby (v1.0) is awake... (◕‿◕✿)\n")
-            
-            # Now show initial pot values on displays
-            if self.displays.is_ready():
-                all_pots = self.hardware.components['pots'].last_normalized_values
-                for display_idx in range(4):
-                    start_idx = display_idx * 4
-                    display_pots = all_pots[start_idx:start_idx + 4]
-                    self.displays.show_pot_values(display_idx, display_pots)
             
             # Now that everything is initialized and ready, set up detect pin
             self.detect_pin = digitalio.DigitalInOut(DETECT_PIN)

@@ -27,12 +27,13 @@ class ConnectionManager:
     CONFIG_CC = 127     # CC number for config acknowledgment
     CONFIG_EMPTY = 0    # Value for empty config
     
-    def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager):
+    def __init__(self, text_uart, hardware_coordinator, midi_logic, transport_manager, display_manager):
         try:
             self.uart = text_uart
             self.hardware = hardware_coordinator
             self.midi = midi_logic
             self.transport = transport_manager
+            self.display = display_manager
             
             # Connection state
             self.state = self.STANDALONE
@@ -185,6 +186,11 @@ class ConnectionManager:
             midi_format = "cc:" + ",".join(midi_assignments)
             if self.midi.handle_config_message(midi_format):
                 log(TAG_CONNECT, f"CC Configuration parsed for {self.cartridge_name} ({self.instrument_name}): {len(self.pot_mapping)} mappings")
+                
+                # Update displays with config
+                if self.display:
+                    self.display.set_config(message)
+                
                 # For non-empty configs, just send current pot values as the reply
                 self._send_pot_values()
                 return True
