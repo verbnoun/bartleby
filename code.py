@@ -139,7 +139,7 @@ class Bartleby:
             if changes['encoders']:
                 self.hardware.handle_encoder_events(changes['encoders'], self.midi)
             
-            # Process MIDI updates and display changes
+            # Process MIDI first
             if changes['keys'] or changes['pots'] or changes['encoders']:
                 self.midi.update(
                     changes['keys'],
@@ -147,16 +147,10 @@ class Bartleby:
                     {}  # Empty config since we're not using instrument settings
                 )
                 
-                # Update displays if pots changed
+                # Then update displays for changed pots only
                 if changes['pots'] and self.displays.is_ready():
-                    # Get current normalized values for all pots
-                    all_pots = self.hardware.components['pots'].last_normalized_values
-                    
-                    # Update each display with its 4 pot values
-                    for display_idx in range(4):  # Update first 4 displays
-                        start_idx = display_idx * 4
-                        display_pots = all_pots[start_idx:start_idx + 4]
-                        self.displays.show_pot_values(display_idx, display_pots)
+                    for pot_num, old_val, new_val in changes['pots']:
+                        self.displays.update_pot_value(pot_num, new_val)
             
             return True
                 

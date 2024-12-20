@@ -21,17 +21,22 @@ class ConfigData:
         self.mappings = {}  # pot_num -> (cc_num, label)
 
 class DisplayManager:
-    def _format_label(self, label):
-        """Format a label by removing vowels and capping at 9 chars."""
-        # Remove vowels
-        no_vowels = ''.join(c for c in label if c.lower() not in 'aeiou')
-        return no_vowels[:9]  # Cap at 9 chars
+    def _format_pot_label(self, label):
+        """Format a pot label: capitalize first letter, remove other vowels, cap at 9 chars."""
+        if not label:
+            return label
+            
+        # Capitalize first letter
+        result = label[0].upper()
+        # Remove vowels from rest
+        rest = ''.join(c for c in label[1:] if c.lower() not in 'aeiou')
+        return (result + rest)[:9]  # Cap at 9 chars
         
     def _get_pot_label(self, pot_num):
         """Get the label for a pot - either config label or default P## label."""
         if self.config and pot_num in self.config.mappings:
             cc_num, label = self.config.mappings[pot_num]
-            return self._format_label(label)
+            return self._format_pot_label(label)
         return f"P{pot_num:02d}"
         
     def _get_pot_value(self, pot_num):
@@ -121,9 +126,9 @@ class DisplayManager:
                 display.text("Bartleby", 0, 8, 1)
                 display.text("+", 0, 24, 1)
                 if self.config.cartridge:
-                    display.text(self._format_label(self.config.cartridge), 0, 40, 1)
+                    display.text(self.config.cartridge, 0, 40, 1)
                 if self.config.status:
-                    display.text(self._format_label(self.config.status), 0, 56, 1)
+                    display.text(self.config.status, 0, 56, 1)
                 display.show()
                 
         except Exception as e:
@@ -139,16 +144,18 @@ class DisplayManager:
                 
                 display.fill(0)
                 
-                # Find this display's position in SCREEN_ORDER
-                display_position = next(i for i, d in enumerate(self.displays) if d['channel'] == display_info['channel'])
+                # Find physical position (0-4) based on channel number
+                physical_position = SCREEN_ORDER.index(display_info['channel'])
                 
-                # Calculate pot numbers for this display
-                # First display: 0,1 and 8,9
-                # Second display: 2,3 and 10,11
-                # Third display: 4,5 and 12,13
-                # Fourth display: 6,7 and 14,15
-                top_pot = display_position * 2  # 0,2,4,6
-                bottom_pot = display_position * 2 + 8  # 8,10,12,14
+                # Calculate pot numbers for this display based on physical position
+                # Physical position 0 (leftmost): pots 0,1 and 8,9
+                # Physical position 1: pots 2,3 and 10,11
+                # Physical position 2: pots 4,5 and 12,13
+                # Physical position 3: pots 6,7 and 14,15
+                top_pot = physical_position * 2  # 0,2,4,6
+                bottom_pot = physical_position * 2 + 8  # 8,10,12,14
+                
+                log(TAG_DISPLAY, f"Updating display {display_index} (channel {display_info['channel']}, physical {physical_position}) with pots {top_pot},{top_pot+1} and {bottom_pot},{bottom_pot+1}")
                 
                 # Left column
                 display.text(self._get_pot_label(top_pot), 0, 0, 1)
@@ -189,7 +196,7 @@ class DisplayManager:
                     if self.i2c.try_lock():
                         try:
                             self.i2c.writeto(I2C_MUX_ADDRESS, bytes([1 << channel]))
-                            time.sleep(0.1)  # Allow channel to settle
+                            time.sleep(0.001)  # Reduced delay - same as main loop interval
                         finally:
                             self.i2c.unlock()
                     
@@ -244,7 +251,7 @@ class DisplayManager:
         if self.i2c.try_lock():
             try:
                 self.i2c.writeto(I2C_MUX_ADDRESS, bytes([1 << channel]))
-                time.sleep(0.1)  # Allow channel to settle
+                time.sleep(0.001)  # Reduced delay - same as main loop interval
             finally:
                 self.i2c.unlock()
 
@@ -333,34 +340,47 @@ class DisplayManager:
         """Return the number of initialized displays."""
         return len(self.displays)
     
-    def show_pot_values(self, display_index, values):
-        """Update pot values and refresh display.
+    def update_pot_value(self, pot_num, value):
+        """Update a single pot value and mark its display for refresh.
         
         Args:
-            display_index: Which display to update
-            values: List of 4 normalized pot values (0.0-1.0)
+            pot_num: Which pot changed (0-15)
+            value: New normalized value (0.0-1.0)
         """
         try:
-            if 0 <= display_index < len(self.displays):
-                # Find display's position in SCREEN_ORDER
-                display_position = next(i for i, d in enumerate(self.displays) if d['channel'] == self.displays[display_index]['channel'])
+            if 0 <= pot_num < 16:
+                # Update stored value
+                self.pot_values[pot_num] = value
                 
-                # Update stored pot values
-                for i, value in enumerate(values):
-                    if i < 2:  # Top row pots (0,1 or 2,3 or 4,5 or 6,7)
-                        pot_num = display_position * 2 + i
-                    else:  # Bottom row pots (8,9 or 10,11 or 12,13 or 14,15)
-                        pot_num = display_position * 2 + 8 + (i - 2)
-                    if pot_num < 16:  # Ensure we don't exceed array bounds
-                        self.pot_values[pot_num] = value
+                # Calculate which display position (0-3) this pot belongs to
+                # Pots 0,1 -> position 0
+                # Pots 2,3 -> position 1
+                # Pots 4,5 -> position 2
+                # Pots 6,7 -> position 3
+                # Same pattern for pots 8-15
+                display_position = (pot_num % 8) // 2
                 
-                # Update display with new values
-                self.update_display_with_config(display_index)
+                # Get the channel number for this position from SCREEN_ORDER
+                channel = SCREEN_ORDER[display_position]
                 
-            else:
-                log(TAG_DISPLAY, f"Invalid display index: {display_index}", is_error=True)
+                log(TAG_DISPLAY, f"Mapping pot {pot_num} -> display position {display_position} -> channel {channel}")
+                
+                # Find the display index that has this channel
+                display_index = None
+                for i, display in enumerate(self.displays):
+                    if display['channel'] == channel:
+                        display_index = i
+                        break
+                
+                log(TAG_DISPLAY, f"Found display index {display_index} for pot {pot_num}")
+                
+                # Update display if found and initialized
+                if display_index is not None and 0 <= display_index < len(self.displays):
+                    self.update_display_with_config(display_index)
+                    log(TAG_DISPLAY, f"Updated display {display_index} (channel {channel}, position {display_position}) for pot {pot_num}")
+                
         except Exception as e:
-            log(TAG_DISPLAY, f"Error showing pot values on display {display_index}: {str(e)}", is_error=True)
+            log(TAG_DISPLAY, f"Error updating pot {pot_num}: {str(e)}", is_error=True)
         
     def deinit(self):
         """Clean up resources."""
