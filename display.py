@@ -9,10 +9,7 @@ from constants import (
     I2C_SDA, I2C_SCL, I2C_MUX_ADDRESS, OLED_ADDRESS,
     OLED_WIDTH, OLED_HEIGHT, OLED_CHANNELS, SCREEN_ROTATIONS, SCREEN_ORDER
 )
-from logging import log
-
-# Create a new logging tag for display operations
-TAG_DISPLAY = "DISPLAY "  # Must be 8 chars (spaces ok)
+from logging import log, TAG_DISPLAY
 
 class ConfigData:
     def __init__(self):

@@ -54,12 +54,13 @@ TAG_PRESSUR = 'PRESSUR '   # pressure.py
 TAG_STATE = 'STATE   '    # state.py
 TAG_TRANS = 'TRANS   '    # transport.py
 TAG_ZONES = 'ZONES   '    # zones.py
+TAG_DISPLAY = 'DISPLAY '   # display.py
 
 # Map tags to colors - Each file has a unique color
 TAG_COLORS = {
     TAG_BARTLEBY: COLOR_WHITE,      # code.py - White
     TAG_CONFIG: COLOR_PEACH,        # config.py - Peach
-    "DISPLAY ": COLOR_AZURE,        # display.py - Azure
+    TAG_DISPLAY: COLOR_AZURE,       # display.py - Azure
     TAG_CONNECT: COLOR_YELLOW,      # connection.py - Yellow
     TAG_CONTROL: COLOR_SAGE,        # controls.py - Sage
     TAG_COORD: COLOR_AQUA,          # coordinator.py - Aqua
@@ -99,7 +100,8 @@ LOG_ENABLE = {
     TAG_PRESSUR: False,
     TAG_STATE: False,
     TAG_TRANS: False,
-    TAG_ZONES: False
+    TAG_ZONES: False,
+    TAG_DISPLAY: False
 }
 
 # Special debug flags
