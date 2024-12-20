@@ -5,6 +5,15 @@ import board
 # Hardware Setup
 SETUP_DELAY = 0.1
 
+# I2C Display Setup
+I2C_SDA = board.GP18
+I2C_SCL = board.GP19
+I2C_MUX_ADDRESS = 0x70  # TCA9548A default address
+OLED_ADDRESS = 0x3C    # SSD1306 default address
+OLED_WIDTH = 128
+OLED_HEIGHT = 64
+OLED_CHANNELS = [0, 1, 2, 3, 4]  # Using first 5 channels of TCA9548A
+
 # UART/MIDI Pins
 UART_TX = board.GP16
 UART_RX = board.GP17

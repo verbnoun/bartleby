@@ -59,6 +59,7 @@ TAG_ZONES = 'ZONES   '    # zones.py
 TAG_COLORS = {
     TAG_BARTLEBY: COLOR_WHITE,      # code.py - White
     TAG_CONFIG: COLOR_PEACH,        # config.py - Peach
+    "DISPLAY ": COLOR_AZURE,        # display.py - Azure
     TAG_CONNECT: COLOR_YELLOW,      # connection.py - Yellow
     TAG_CONTROL: COLOR_SAGE,        # controls.py - Sage
     TAG_COORD: COLOR_AQUA,          # coordinator.py - Aqua
@@ -81,8 +82,8 @@ TAG_COLORS = {
 # Enable flags for each module's logging - Alphabetically ordered
 LOG_ENABLE = {
     TAG_BARTLEBY: True,
-    TAG_CONFIG: True,
-    TAG_CONNECT: True,
+    TAG_CONFIG: False,
+    TAG_CONNECT: False,
     TAG_CONTROL: False,
     TAG_COORD: False,
     TAG_ENCODER: False,
@@ -90,7 +91,7 @@ LOG_ENABLE = {
     TAG_HW: False,
     TAG_KEYBD: False,
     TAG_KEYSTAT: False,
-    TAG_MESSAGE: True,
+    TAG_MESSAGE: False,
     TAG_MIDI: False,
     TAG_MUX: False,
     TAG_NOTES: False,

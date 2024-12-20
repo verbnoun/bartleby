@@ -18,6 +18,7 @@ from state import StateManager
 from coordinator import HardwareCoordinator
 from connection import ConnectionManager
 from midi import MidiLogic
+from display import DisplayManager
 
 def _cycle_log(message):
     """Special logging effect for startup messages."""
@@ -63,6 +64,11 @@ class Bartleby:
             # Initialize hardware first to set up detect pin
             self.hardware = HardwareCoordinator()
             log(TAG_BARTLEBY, "Hardware coordinator initialized")
+            
+            # Initialize displays independently
+            self.displays = DisplayManager()
+            if self.displays.is_ready():
+                self.displays.show_text_all("Bartleby")
             
             # Initialize connection manager with hardware's detect pin
             self.connection_manager = ConnectionManager(
