@@ -13,6 +13,8 @@ OLED_ADDRESS = 0x3C    # SSD1306 default address
 OLED_WIDTH = 128
 OLED_HEIGHT = 64
 OLED_CHANNELS = [0, 1, 2, 3, 4]  # Using first 5 channels of TCA9548A
+SCREEN_ROTATIONS = [2, 2, 2, 2, 2]  # Rotation for each display (0=normal, 1=90deg, 2=180deg, 3=270deg)
+SCREEN_ORDER = [4, 3, 2, 1, 0]  # Order of displays (e.g. [4,0,1,2,3] to move display 4 to start)
 
 # UART/MIDI Pins
 UART_TX = board.GP16
