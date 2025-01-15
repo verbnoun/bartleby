@@ -97,7 +97,7 @@ LOG_ENABLE = {
     TAG_MUX: False,
     TAG_NOTES: False,
     TAG_POTS: False,
-    TAG_PRESSUR: False,
+    TAG_PRESSUR: True,
     TAG_STATE: False,
     TAG_TRANS: False,
     TAG_ZONES: False,
