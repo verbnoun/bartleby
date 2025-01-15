@@ -3,13 +3,13 @@
 import digitalio
 import time
 from hardware import (
-    Multiplexer, KeyboardHandler, RotaryEncoderHandler, 
+    Multiplexer, KeyboardHandler, OctaveButtonHandler, 
     PotentiometerHandler
 )
 from constants import (
     SETUP_DELAY, DETECT_PIN,
     CONTROL_MUX_SIG, CONTROL_MUX_S0, CONTROL_MUX_S1, CONTROL_MUX_S2, CONTROL_MUX_S3,
-    OCTAVE_ENC_CLK, OCTAVE_ENC_DT,
+    OCTAVE_UP_PIN, OCTAVE_DOWN_PIN,
     KEYBOARD_L1A_MUX_SIG, KEYBOARD_L1A_MUX_S0, KEYBOARD_L1A_MUX_S1, KEYBOARD_L1A_MUX_S2, KEYBOARD_L1A_MUX_S3,
     KEYBOARD_L1B_MUX_SIG, KEYBOARD_L1B_MUX_S0, KEYBOARD_L1B_MUX_S1, KEYBOARD_L1B_MUX_S2, KEYBOARD_L1B_MUX_S3,
     KEYBOARD_L2_MUX_S0, KEYBOARD_L2_MUX_S1, KEYBOARD_L2_MUX_S2, KEYBOARD_L2_MUX_S3
@@ -42,10 +42,10 @@ class HardwareCoordinator:
             log(TAG_HW, "Setting up keyboard")
             keyboard = self._setup_keyboard()
             
-            log(TAG_HW, "Initializing encoders")
-            encoders = RotaryEncoderHandler(
-                OCTAVE_ENC_CLK,
-                OCTAVE_ENC_DT
+            log(TAG_HW, "Initializing octave buttons")
+            octave_control = OctaveButtonHandler(
+                OCTAVE_UP_PIN,
+                OCTAVE_DOWN_PIN
             )
             
             log(TAG_HW, "Initializing potentiometers")
@@ -54,7 +54,7 @@ class HardwareCoordinator:
             return {
                 'control_mux': control_mux,
                 'keyboard': keyboard,
-                'encoders': encoders,
+                'octave_control': octave_control,
                 'pots': pots
             }
         except Exception as e:
@@ -114,14 +114,12 @@ class HardwareCoordinator:
                     log(TAG_HW, f"Pots changed: {len(changes['pots'])} events")
                 state_manager.update_pot_scan_time()
             
-            # Read encoders at interval
+            # Read octave buttons at interval
             if state_manager.should_scan_encoders():
-                for i in range(self.components['encoders'].num_encoders):
-                    new_events = self.components['encoders'].read_encoder(i)
-                    if new_events:
-                        changes['encoders'].extend(new_events)
-                if changes['encoders']:
-                    log(TAG_HW, f"Encoders changed: {len(changes['encoders'])} events")
+                new_events = self.components['octave_control'].read_buttons()
+                if new_events:
+                    changes['encoders'].extend(new_events)
+                    log(TAG_HW, f"Octave changed: {len(new_events)} events")
                 state_manager.update_encoder_scan_time()
                 
             return changes
@@ -136,13 +134,13 @@ class HardwareCoordinator:
                 if event[0] == 'rotation':
                     _, direction = event[1:3]
                     midi.handle_octave_shift(direction)
-                    log(TAG_HW, f"Octave shifted {direction}: new position {self.components['encoders'].get_encoder_position(0)}")
+                    log(TAG_HW, f"Octave shifted {direction}: new position {self.components['octave_control'].get_position()}")
         except Exception as e:
             log(TAG_HW, f"Error handling encoder events: {str(e)}", is_error=True)
     
     def reset_encoders(self):
         try:
-            self.components['encoders'].reset_all_encoder_positions()
-            log(TAG_HW, "All encoder positions reset")
+            self.components['octave_control'].reset_position()
+            log(TAG_HW, "Octave position reset")
         except Exception as e:
             log(TAG_HW, f"Error resetting encoders: {str(e)}", is_error=True)

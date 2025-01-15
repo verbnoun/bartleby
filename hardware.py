@@ -7,12 +7,12 @@ from constants import (
     KEYBOARD_L1B_MUX_SIG, KEYBOARD_L1B_MUX_S0, KEYBOARD_L1B_MUX_S1, KEYBOARD_L1B_MUX_S2, KEYBOARD_L1B_MUX_S3,
     KEYBOARD_L2_MUX_S0, KEYBOARD_L2_MUX_S1, KEYBOARD_L2_MUX_S2, KEYBOARD_L2_MUX_S3,
     CONTROL_MUX_SIG, CONTROL_MUX_S0, CONTROL_MUX_S1, CONTROL_MUX_S2, CONTROL_MUX_S3,
-    OCTAVE_ENC_CLK, OCTAVE_ENC_DT
+    OCTAVE_UP_PIN, OCTAVE_DOWN_PIN
 )
 from logging import log, TAG_HARDWAR
 from mux import Multiplexer
 from keyboard import KeyboardHandler
-from encoder import RotaryEncoderHandler
+from encoder import OctaveButtonHandler
 from pots import PotentiometerHandler
 
 class HardwareManager:
@@ -63,11 +63,11 @@ class HardwareManager:
                 KEYBOARD_L2_MUX_S3
             )
 
-            # Initialize encoder handler
-            log(TAG_HARDWAR, "Initializing encoder handler")
-            self.encoder = RotaryEncoderHandler(
-                OCTAVE_ENC_CLK,
-                OCTAVE_ENC_DT
+            # Initialize octave button handler
+            log(TAG_HARDWAR, "Initializing octave button handler")
+            self.octave_control = OctaveButtonHandler(
+                OCTAVE_UP_PIN,
+                OCTAVE_DOWN_PIN
             )
 
             # Initialize potentiometer handler
@@ -90,15 +90,15 @@ class HardwareManager:
             log(TAG_HARDWAR, f"Error reading keyboard: {str(e)}", is_error=True)
             return []
 
-    def read_encoder(self, encoder_num):
-        """Read encoder state changes"""
+    def read_octave_buttons(self):
+        """Read octave button state changes"""
         try:
-            changes = self.encoder.read_encoder(encoder_num)
+            changes = self.octave_control.read_buttons()
             if changes:
-                log(TAG_HARDWAR, f"Encoder {encoder_num} changes: {len(changes)} events")
+                log(TAG_HARDWAR, f"Octave button changes: {len(changes)} events")
             return changes
         except Exception as e:
-            log(TAG_HARDWAR, f"Error reading encoder {encoder_num}: {str(e)}", is_error=True)
+            log(TAG_HARDWAR, f"Error reading octave buttons: {str(e)}", is_error=True)
             return []
 
     def read_pots(self):
@@ -122,22 +122,22 @@ class HardwareManager:
             log(TAG_HARDWAR, f"Error reading all potentiometers: {str(e)}", is_error=True)
             return []
 
-    def get_encoder_position(self, encoder_num):
-        """Get current encoder position"""
+    def get_octave_position(self):
+        """Get current octave position"""
         try:
-            position = self.encoder.get_encoder_position(encoder_num)
+            position = self.octave_control.get_position()
             return position
         except Exception as e:
-            log(TAG_HARDWAR, f"Error getting encoder {encoder_num} position: {str(e)}", is_error=True)
+            log(TAG_HARDWAR, f"Error getting octave position: {str(e)}", is_error=True)
             return 0
 
-    def reset_encoder_position(self, encoder_num):
-        """Reset encoder position"""
+    def reset_octave_position(self):
+        """Reset octave position"""
         try:
-            self.encoder.reset_encoder_position(encoder_num)
-            log(TAG_HARDWAR, f"Reset encoder {encoder_num} position")
+            self.octave_control.reset_position()
+            log(TAG_HARDWAR, "Reset octave position")
         except Exception as e:
-            log(TAG_HARDWAR, f"Error resetting encoder {encoder_num}: {str(e)}", is_error=True)
+            log(TAG_HARDWAR, f"Error resetting octave position: {str(e)}", is_error=True)
 
     def format_key_hardware_data(self):
         """Get formatted hardware data for debugging"""

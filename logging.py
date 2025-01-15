@@ -87,7 +87,7 @@ LOG_ENABLE = {
     TAG_CONNECT: False,
     TAG_CONTROL: False,
     TAG_COORD: False,
-    TAG_ENCODER: False,
+    TAG_ENCODER: True,
     TAG_HARDWAR: False,
     TAG_HW: False,
     TAG_KEYBD: False,

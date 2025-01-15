@@ -69,8 +69,8 @@ CONTROL_MUX_S1 = board.GP13
 CONTROL_MUX_S2 = board.GP14
 CONTROL_MUX_S3 = board.GP15
 
-OCTAVE_ENC_CLK = board.GP20
-OCTAVE_ENC_DT = board.GP21
+OCTAVE_UP_PIN = board.GP20    # Previously OCTAVE_ENC_CLK 
+OCTAVE_DOWN_PIN = board.GP21  # Previously OCTAVE_ENC_DT
 
 # Potentiometer Constants
 POT_THRESHOLD = 1500  # Threshold for initial pot activation
